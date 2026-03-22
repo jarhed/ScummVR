@@ -6,7 +6,11 @@ Play classic point-and-click adventure games in VR on your Meta Quest. Your game
 
 ## Install (5 minutes)
 
-You need a USB cable and a computer with [ADB](https://developer.android.com/tools/adb) installed.
+You need a USB cable and a computer with ADB installed.
+
+- **Windows:** Download [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools#downloads), unzip it, and open a Command Prompt in that folder
+- **Mac:** `brew install android-platform-tools`
+- **Linux:** `sudo apt install adb`
 
 ### Step 1: Enable Developer Mode on your Quest
 
@@ -43,7 +47,32 @@ adb push ~/games/dott/ /sdcard/scummvm_games/dott/
 3. Browse to your game folder and select it
 4. Hit **Start**
 
-## Free games to try
+### Using Steam games
+
+If you own classic adventure games on Steam, the game files are already on your PC. Just find them and push them to the Quest:
+
+**Windows:**
+```
+adb push "C:\Program Files\Steam\steamapps\common\Day of the Tentacle Remastered" /sdcard/scummvm_games/dott/
+adb push "C:\Program Files\Steam\steamapps\common\Indiana Jones and the Fate of Atlantis" /sdcard/scummvm_games/indy4/
+adb push "C:\Program Files\Steam\steamapps\common\The Dig" /sdcard/scummvm_games/dig/
+```
+
+**Linux:**
+```
+adb push ~/.steam/steam/steamapps/common/Day\ of\ the\ Tentacle\ Remastered/ /sdcard/scummvm_games/dott/
+adb push ~/.steam/steam/steamapps/common/Full\ Throttle\ Remastered/ /sdcard/scummvm_games/throttle/
+adb push ~/.steam/steam/steamapps/common/Sam\ \&\ Max\ Hit\ the\ Road/ /sdcard/scummvm_games/samnmax/
+```
+
+**macOS:**
+```
+adb push ~/Library/Application\ Support/Steam/steamapps/common/Day\ of\ the\ Tentacle\ Remastered/ /sdcard/scummvm_games/dott/
+```
+
+ScummVM knows how to read the data files from both the original and remastered editions. You don't need the Steam executable — just the game data files.
+
+### Free games to try
 
 - [Beneath a Steel Sky](https://www.scummvm.org/games/#games-bass) — free download
 - [Flight of the Amazon Queen](https://www.scummvm.org/games/#games-queen) — free download
