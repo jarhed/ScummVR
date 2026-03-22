@@ -1,0 +1,272 @@
+/* ScummVM - Graphic Adventure Engine
+ *
+ * ScummVM is the legal property of its developers, whose names
+ * are too numerous to list here. Please refer to the COPYRIGHT
+ * file distributed with this source distribution.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#ifndef MEDIASTATION_GRAPHICS_H
+#define MEDIASTATION_GRAPHICS_H
+
+#include "common/rect.h"
+#include "common/array.h"
+#include "common/stack.h"
+#include "graphics/managed_surface.h"
+#include "graphics/screen.h"
+
+#include "mediastation/clients.h"
+#include "mediastation/mediascript/scriptvalue.h"
+
+namespace MediaStation {
+
+class MediaStationEngine;
+struct DissolvePattern;
+class PixMapImage;
+
+enum BlitMode {
+	kUncompressedBlit = 0x00,
+	kRle8Blit = 0x01,
+	kClipEnabled = 0x04,
+	kUncompressedTransparentBlit = 0x08,
+	kPartialDissolve = 0x10,
+	kFullDissolve = 0x20,
+	kCccBlit = 0x40,
+	kCccTransparentBlit = 0x80
+};
+
+enum TransitionType {
+	kTransitionFadeToBlack = 300,
+	kTransitionFadeToPalette = 301,
+	kTransitionSetToPalette = 302,
+	kTransitionSetToBlack = 303,
+	kTransitionFadeToColor = 304,
+	kTransitionSetToColor = 305,
+	kTransitionSetToPercentOfPalette = 306,
+	kTransitionFadeToPaletteObject = 307,
+	kTransitionSetToPaletteObject = 308,
+	kTransitionSetToPercentOfPaletteObject = 309,
+	kTransitionColorShiftCurrentPalette = 310,
+	kTransitionCircleOut = 328
+};
+
+enum VideoDisplayManagerSectionType {
+	kVideoDisplayManagerUpdateDirty = 0x578,
+	kVideoDisplayManagerUpdateAll = 0x579,
+	kVideoDisplayManagerEffectTransition = 0x57a,
+	kVideoDisplayManagerSetTime = 0x57b,
+	kVideoDisplayManagerLoadPalette = 0x5aa,
+};
+
+class Region {
+public:
+	void addRect(const Common::Rect &rect);
+	bool intersects(const Common::Rect &rect);
+	void operator&=(const Common::Rect &rect);
+	void operator+=(const Common::Point &point);
+
+	Common::Array<Common::Rect> _rects;
+	Common::Rect _bounds;
+};
+
+class Clip {
+public:
+	Clip() {}
+	Clip(const Common::Rect &rect);
+
+	void addToRegion(const Region &region);
+	void addToRegion(const Common::Rect &rect);
+	bool clipIntersectsRect(const Common::Rect &rect);
+	void intersectWithRegion(const Common::Rect &rect);
+	void makeEmpty();
+
+	Region _region;
+	Common::Rect _bounds;
+};
+
+class DisplayContext {
+public:
+	bool clipIsEmpty();
+	void intersectClipWith(const Common::Rect &rect);
+	bool rectIsInClip(const Common::Rect &rect);
+	void setClipTo(Region region);
+	void emptyCurrentClip();
+	void deleteClips();
+
+	void addClip();
+	Clip *currentClip();
+	Clip *previousClip();
+	void verifyClipSize();
+
+	// These are not named as such in the original, but are helper functions
+	// for things that likely were macros or something similar in the original.
+	void pushOrigin();
+	void popOrigin();
+
+	Common::Point _origin;
+	Graphics::ManagedSurface *_destImage = nullptr;
+
+private:
+	Common::Stack<Common::Point> _origins;
+	Common::Stack<Clip> _clips;
+};
+
+class VideoDisplayManager : public ParameterClient {
+public:
+	VideoDisplayManager(MediaStationEngine *vm);
+	~VideoDisplayManager();
+
+	virtual bool attemptToReadFromStream(Chunk &chunk, uint sectionType) override;
+
+	void updateScreen() { _screen->update(); }
+	Graphics::Palette *getRegisteredPalette() { return _registeredPalette; }
+	void setRegisteredPalette(Graphics::Palette *palette) { _registeredPalette = palette; }
+
+	void imageBlit(
+		Common::Point destinationPoint,
+		const PixMapImage *image,
+		double dissolveFactor,
+		DisplayContext *displayContext,
+		Graphics::ManagedSurface *destinationImage = nullptr,
+		bool useTransBlit = false);
+
+	void imageDeltaBlit(
+		Common::Point deltaFramePos,
+		const Common::Point &keyFrameOffset,
+		const PixMapImage *deltaFrame,
+		const PixMapImage *keyFrame,
+		const double dissolveFactor,
+		DisplayContext *displayContext);
+
+	void effectTransition(Common::Array<ScriptValue> &args);
+	void setTransitionOnSync(Common::Array<ScriptValue> &args) { _scheduledTransitionOnSync = args; }
+	void doTransitionOnSync();
+
+	void performUpdateDirty();
+	void performUpdateAll();
+
+	void setGammaValues(double red, double green, double blue);
+	void getDefaultGammaValues(double &red, double &green, double &blue);
+	void getGammaValues(double &red, double &green, double &blue);
+
+	DisplayContext _displayContext;
+
+private:
+	MediaStationEngine *_vm = nullptr;
+	Graphics::Screen *_screen = nullptr;
+	Graphics::Palette *_registeredPalette = nullptr;
+	Common::Array<ScriptValue> _scheduledTransitionOnSync;
+	double _defaultTransitionTime = 0.0;
+
+	const double DEFAULT_GAMMA_VALUE = 1.0;
+	double _redGamma = 1.0;
+	double _greenGamma = 1.0;
+	double _blueGamma = 1.0;
+
+	void readAndEffectTransition(Chunk &chunk);
+	void readAndRegisterPalette(Chunk &chunk);
+
+	// Blitting methods.
+	// blitRectsClip encompasses the functionality of both opaqueBlitRectsClip
+	// and transparentBlitRectsClip in the disasm.
+	void blitRectsClip(
+		Graphics::ManagedSurface *dest,
+		const Common::Point &destLocation,
+		const Graphics::ManagedSurface &source,
+		const Common::Array<Common::Rect> &dirtyRegion,
+		bool useTransBlit = false);
+	void rleBlitRectsClip(
+		Graphics::ManagedSurface *dest,
+		const Common::Point &destLocation,
+		const PixMapImage *source,
+		const Common::Array<Common::Rect> &dirtyRegion);
+	Graphics::ManagedSurface decompressRle8Bitmap(
+		const PixMapImage *source,
+		const Graphics::ManagedSurface *keyFrame = nullptr,
+		const Common::Point *keyFrameOffset = nullptr);
+	void dissolveBlitRectsClip(
+		Graphics::ManagedSurface *dest,
+		const Common::Point &destPos,
+		const PixMapImage *source,
+		const Common::Array<Common::Rect> &dirtyRegion,
+		const uint dissolveFactor);
+	void dissolveBlit1Rect(
+		Graphics::ManagedSurface *dest,
+		const Common::Rect &areaToRedraw,
+		const Common::Point &originOnScreen,
+		const PixMapImage *source,
+		const Common::Rect &dirtyRegion,
+		const DissolvePattern &pattern);
+	void fullDeltaRleBlitRectsClip(
+		Graphics::ManagedSurface *destinationImage,
+		const Common::Point &deltaFramePos,
+		const Common::Point &keyFrameOffset,
+		const PixMapImage *deltaFrame,
+		const PixMapImage *keyFrame,
+		const Common::Array<Common::Rect> &dirtyRegion);
+	void deltaRleBlitRectsClip(
+		Graphics::ManagedSurface *destinationImage,
+		const Common::Point &deltaFramePos,
+		const PixMapImage *deltaFrame,
+		const PixMapImage *keyFrame,
+		const Common::Array<Common::Rect> &dirtyRegion);
+	void deltaRleBlit1Rect(
+		Graphics::ManagedSurface *destinationImage,
+		const Common::Point &destinationPoint,
+		const PixMapImage *sourceImage,
+		const PixMapImage *deltaImage,
+		const Common::Rect &dirtyRect);
+
+	// Transition methods.
+	const double DEFAULT_FADE_TRANSITION_TIME_IN_SECONDS = 0.5;
+	const byte DEFAULT_PALETTE_TRANSITION_START_INDEX = 0x01;
+	const byte DEFAULT_PALETTE_TRANSITION_COLOR_COUNT = 0xFE;
+	void fadeToBlack(Common::Array<ScriptValue> &args);
+	void fadeToRegisteredPalette(Common::Array<ScriptValue> &args);
+	void setToRegisteredPalette(Common::Array<ScriptValue> &args);
+	void setToBlack(Common::Array<ScriptValue> &args);
+	void fadeToColor(Common::Array<ScriptValue> &args);
+	void setToColor(Common::Array<ScriptValue> &args);
+	void setToPercentOfPalette(Common::Array<ScriptValue> &args);
+	void fadeToPaletteObject(Common::Array<ScriptValue> &args);
+	void setToPaletteObject(Common::Array<ScriptValue> &args);
+	void setToPercentOfPaletteObject(Common::Array<ScriptValue> &args);
+	void colorShiftCurrentPalette(Common::Array<ScriptValue> &args);
+	void circleOut(Common::Array<ScriptValue> &args);
+
+	void _setPalette(Graphics::Palette &palette, uint startIndex, uint colorCount);
+	void _setPaletteToColor(Graphics::Palette &targetPalette, byte r, byte g, byte b);
+	uint _limitColorRange(uint &startIndex, uint &colorCount);
+	byte _interpolateColorComponent(byte source, byte target, double progress);
+
+	void _fadeToColor(byte r, byte g, byte b, double fadeTime, uint startIndex, uint colorCount);
+	void _setToColor(byte r, byte g, byte b, uint startIndex, uint colorCount);
+	void _setPercentToColor(double percent, byte r, byte g, byte b, uint startIndex, uint colorCount);
+
+	void _fadeToPalette(double fadeTime, Graphics::Palette &targetPalette, uint startIndex, uint colorCount);
+	void _setToPercentPalette(double percent, Graphics::Palette &currentPalette, Graphics::Palette &targetPalette,
+		uint startIndex, uint colorCount);
+	void _fadeToRegisteredPalette(double fadeTime, uint startIndex, uint colorCount);
+	void _setToRegisteredPalette(uint startIndex, uint colorCount);
+	void _colorShiftCurrentPalette(uint startIndex, uint shiftAmount, uint colorCount);
+	void _fadeToPaletteObject(uint paletteId, double fadeTime, uint startIndex, uint colorCount);
+	void _setToPaletteObject(uint paletteId, uint startIndex, uint colorCount);
+	void _setPercentToPaletteObject(double percent, uint paletteId, uint startIndex, uint colorCount);
+};
+
+} // End of namespace MediaStation
+
+#endif

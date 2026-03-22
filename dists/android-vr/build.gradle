@@ -1,0 +1,75 @@
+plugins {
+	id('com.android.application') version '9.0.0'
+}
+
+// Load our source dependent properties
+def srcProperties = new Properties()
+srcProperties.load(new FileInputStream(rootProject.file("src.properties")))
+
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs << "-Xlint:deprecation" << "-Xlint:unchecked"
+}
+
+android {
+    namespace = "org.scummvm.scummvm.vr"
+
+    compileSdk {
+        version = release(36)
+    }
+    ndkVersion = "23.2.8568313"
+    enableKotlin = false
+
+    defaultConfig {
+        applicationId "org.scummvm.scummvm.vr"
+
+        // Quest 2 requires minimum SDK 29
+        minSdkVersion 29
+        targetSdkVersion 32
+
+        // Only arm64 for Quest
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        versionName "2026.1.1-vr"
+        versionCode 26011100
+
+        proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), srcProperties['srcdir'] + '/dists/android/proguard-rules.pro'
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            debuggable true
+        }
+        release {
+            debuggable false
+            minifyEnabled true
+            shrinkResources = true
+        }
+    }
+
+    sourceSets {
+        main {
+            if (!project.hasProperty('splitAssets')) {
+                assets.srcDirs 'mainAssets/src/main/assets/'
+            }
+            java.srcDirs srcProperties['srcdir'] + '/backends/platform/android/'
+            jniLibs.srcDirs 'lib/'
+            res.srcDirs srcProperties['srcdir'] + '/dists/android/res/'
+            manifest.srcFile srcProperties['srcdir'] + '/dists/android-vr/AndroidManifest.xml'
+        }
+    }
+
+    lint {
+        abortOnError = false
+    }
+
+    if (project.hasProperty('splitAssets')) {
+        assetPacks = [':mainAssets']
+    }
+}
+
+dependencies {
+    implementation "androidx.annotation:annotation:1.9.1"
+}
