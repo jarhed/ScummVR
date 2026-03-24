@@ -2,7 +2,19 @@
 
 Play classic point-and-click adventure games in VR on your Meta Quest. Your games appear on a big floating screen in a dark virtual cinema, and you point and click with your Quest controller.
 
+<p align="center">
+  <img src="media/dott_opening.png" alt="Day of the Tentacle running in VR" width="700">
+</p>
+
+<p align="center">
+  <a href="media/dott_movie.mp4">Watch gameplay video</a>
+</p>
+
 > **Note:** This has only been tested on a Meta Quest 2. It should work on Quest 3 and Quest Pro but this hasn't been confirmed yet.
+
+<p align="center">
+  <img src="media/dott_menu.png" alt="ScummVM launcher in VR" width="700">
+</p>
 
 ## Install (5 minutes)
 
