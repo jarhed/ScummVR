@@ -63,6 +63,10 @@ struct DioramaSnapshot {
 	uint8_t numBoxes;
 	DioramaWalkBox boxes[DIORAMA_MAX_BOXES];
 
+	// Verb panel: RGBA pixels for the UI area below the game
+	uint16_t verbWidth, verbHeight;
+	uint8_t verbRGBA[DIORAMA_MAX_SCREEN_W * 80 * 4]; // verb panel is ~56px tall max
+
 	// Average scale for depth mapping of the actor diff layer
 	uint8_t avgFrontScale;
 

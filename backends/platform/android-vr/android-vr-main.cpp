@@ -139,6 +139,11 @@ struct VRApp {
 	XrVector2f thumbstickValues[2];
 	int mouseX, mouseY;
 	bool mouseValid;
+
+	// Laser pointer data (world space)
+	float laserStartX, laserStartY, laserStartZ;
+	float laserEndX, laserEndY, laserEndZ;
+	bool laserActive;
 };
 
 // ---- Matrix math ----
@@ -476,6 +481,8 @@ static void pumpEvents(VRApp *a) {
 	}
 }
 
+static bool g_dioramaMode = true;
+
 static void processInput(VRApp *a) {
 	if (!a->sessionRunning) return;
 
@@ -521,26 +528,60 @@ static void processInput(VRApp *a) {
 	}
 
 	// Ray-screen intersection for right controller (hand index 1)
-	// Virtual screen: 3.2m wide, 1.8m tall, at z = -2.5m
 	XrPosef &pose = a->handPoses[1];
 	float qx = pose.orientation.x, qy = pose.orientation.y;
 	float qz = pose.orientation.z, qw = pose.orientation.w;
-	// Forward direction: rotate (0,0,-1) by quaternion (x,y,z,w)
 	float dirX = -2.0f * (qx * qz - qw * qy);
 	float dirY = -2.0f * (qy * qz + qw * qx);
 	float dirZ = -(1.0f - 2.0f * (qx * qx + qy * qy));
 
-	float screenZ = -2.5f;
+	// Store laser start (controller position)
+	a->laserStartX = pose.position.x;
+	a->laserStartY = pose.position.y;
+	a->laserStartZ = pose.position.z;
+	a->laserActive = false;
+
+	// Screen Z and dimensions depend on mode
+	float screenZ, hw, hh, screenCenterY;
+	if (g_dioramaMode && dioramaHasData()) {
+		screenZ = -DIORAMA_DISTANCE - DIORAMA_DEPTH; // back wall
+		hw = DIORAMA_WIDTH / 2.0f;
+		// Get aspect from diorama data
+		const DioramaSnapshot *snap = g_dioramaState ? g_dioramaState->getReadBuffer() : nullptr;
+		float aspect = (snap && snap->screenHeight > 0) ?
+			(float)snap->screenWidth / (float)snap->screenHeight : 2.2f;
+		hh = (DIORAMA_WIDTH / aspect) / 2.0f;
+		screenCenterY = DIORAMA_CENTER_Y + hh; // center of the back wall
+	} else {
+		screenZ = -2.5f;
+		hw = 1.6f;
+		hh = 0.9f;
+		screenCenterY = 0.0f;
+	}
+
 	if (fabsf(dirZ) > 1e-6f) {
 		float t = (screenZ - pose.position.z) / dirZ;
 		if (t > 0) {
 			float hitX = pose.position.x + t * dirX;
 			float hitY = pose.position.y + t * dirY;
 
-			float hw = 1.6f, hh = 0.9f;
-			if (hitX >= -hw && hitX <= hw && hitY >= -hh && hitY <= hh) {
-				float u = 1.0f - (hitX + hw) / (2 * hw); // mirror X
-				float v = (hitY + hh) / (2 * hh);         // mirror Y
+			// Check if hit is within the screen bounds
+			float relY = hitY - screenCenterY + hh;
+			if (hitX >= -hw && hitX <= hw && relY >= 0 && relY <= 2 * hh) {
+				// Compute UV on the screen quad
+				float u = 1.0f - (hitX + hw) / (2 * hw); // mirrored X
+				float v;
+				if (g_dioramaMode) {
+					v = 1.0f - relY / (2 * hh); // diorama: texture is Y-flipped at source
+				} else {
+					v = relY / (2 * hh); // flat screen: texture is Y-flipped via blit
+				}
+
+				// Crosshair at the raw world-space hit point
+				a->laserEndX = -hitX; // mirror X to match flipped texture
+				a->laserEndY = hitY;  // Y is correct since texture matches world orientation
+				a->laserEndZ = screenZ + 0.005f;
+				a->laserActive = true;
 				int mx = (int)(u * 1920);
 				int my = (int)(v * 1080);
 
@@ -641,8 +682,78 @@ static void processInput(VRApp *a) {
 	}
 }
 
-// Diorama mode flag (defined later with other ScummVM integration globals)
-static bool g_dioramaMode = true;
+// Laser pointer shader (simple colored line, no texture)
+static const char *kLaserVert =
+	"#version 300 es\n"
+	"layout(location=0) in vec3 pos;\n"
+	"uniform mat4 mvp;\n"
+	"void main() { gl_Position = mvp * vec4(pos, 1.0); }\n";
+
+static const char *kLaserFrag =
+	"#version 300 es\n"
+	"precision mediump float;\n"
+	"uniform vec4 uColor;\n"
+	"out vec4 color;\n"
+	"void main() { color = uColor; }\n";
+
+static GLuint g_laserProgram = 0;
+static GLint g_laserMVPLoc = -1;
+static GLint g_laserColorLoc = -1;
+static GLuint g_laserVBO = 0;
+
+static void initLaser() {
+	GLuint vs = compileShader(GL_VERTEX_SHADER, kLaserVert);
+	GLuint fs = compileShader(GL_FRAGMENT_SHADER, kLaserFrag);
+	g_laserProgram = glCreateProgram();
+	glAttachShader(g_laserProgram, vs);
+	glAttachShader(g_laserProgram, fs);
+	glLinkProgram(g_laserProgram);
+	glDeleteShader(vs);
+	glDeleteShader(fs);
+	g_laserMVPLoc = glGetUniformLocation(g_laserProgram, "mvp");
+	g_laserColorLoc = glGetUniformLocation(g_laserProgram, "uColor");
+	glGenBuffers(1, &g_laserVBO);
+}
+
+static void drawLaser(VRApp *a, const float *viewProj) {
+	if (!a->laserActive || !g_laserProgram)
+		return;
+
+	// Line from controller to hit point
+	float verts[] = {
+		a->laserStartX, a->laserStartY, a->laserStartZ,
+		a->laserEndX,   a->laserEndY,   a->laserEndZ,
+	};
+
+	glUseProgram(g_laserProgram);
+
+	// Identity model matrix — vertices are already in world space
+	glUniformMatrix4fv(g_laserMVPLoc, 1, GL_FALSE, viewProj);
+	glUniform4f(g_laserColorLoc, 0.2f, 0.8f, 1.0f, 0.8f); // cyan laser
+
+	glBindBuffer(GL_ARRAY_BUFFER, g_laserVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void *)0);
+
+	glLineWidth(3.0f);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE); // additive blend for glow
+	glDrawArrays(GL_LINES, 0, 2);
+
+	// Draw a dot at the hit point
+	float dot[] = {
+		a->laserEndX, a->laserEndY, a->laserEndZ + 0.001f,
+	};
+	glBufferData(GL_ARRAY_BUFFER, sizeof(dot), dot, GL_DYNAMIC_DRAW);
+	glUniform4f(g_laserColorLoc, 1.0f, 1.0f, 1.0f, 1.0f); // white dot
+	glDrawArrays(GL_POINTS, 0, 1);
+
+	glDisable(GL_BLEND);
+	glDisableVertexAttribArray(0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glUseProgram(0);
+}
 
 static void renderFrame(VRApp *a) {
 	if (!a->sessionRunning) return;
@@ -700,6 +811,28 @@ static void renderFrame(VRApp *a) {
 				dioramaRendererDraw(vpMat);
 			} else {
 				drawScreen(a, vpMat);
+			}
+
+			// Cursor crosshair at hit point
+			if (a->laserActive && g_laserProgram) {
+				float cx = a->laserEndX, cy = a->laserEndY, cz = a->laserEndZ + 0.005f;
+				float s = 0.015f; // crosshair size in meters
+				float cross[] = {
+					cx - s, cy, cz,   cx + s, cy, cz,     // horizontal
+					cx, cy - s, cz,   cx, cy + s, cz,     // vertical
+				};
+				glUseProgram(g_laserProgram);
+				glUniformMatrix4fv(g_laserMVPLoc, 1, GL_FALSE, vpMat);
+				glUniform4f(g_laserColorLoc, 1.0f, 1.0f, 1.0f, 1.0f);
+				glBindBuffer(GL_ARRAY_BUFFER, g_laserVBO);
+				glBufferData(GL_ARRAY_BUFFER, sizeof(cross), cross, GL_DYNAMIC_DRAW);
+				glEnableVertexAttribArray(0);
+				glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void *)0);
+				glLineWidth(2.0f);
+				glDrawArrays(GL_LINES, 0, 4);
+				glDisableVertexAttribArray(0);
+				glBindBuffer(GL_ARRAY_BUFFER, 0);
+				glUseProgram(0);
 			}
 
 			XrSwapchainImageReleaseInfo ri = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -916,6 +1049,7 @@ extern "C" void android_main(android_app *app) {
 	s_dioramaState.init();
 	g_dioramaState = &s_dioramaState;
 	dioramaRendererInit();
+	initLaser();
 
 	// Start ScummVM on a background thread
 	pthread_create(&a.scummvmThread, nullptr, scummvmThreadFunc, &a);

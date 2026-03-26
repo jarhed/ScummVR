@@ -87,9 +87,12 @@ void dioramaExtract() {
 	g_system->getPaletteManager()->grabPalette(palette, 0, 256);
 
 	// Extract background and composite (game area only)
+	// Flip Y so that row 0 of the texture = bottom of game image
+	// (matches OpenGL texture convention where row 0 is at the bottom)
 	for (int y = 0; y < h; y++) {
-		const byte *bgRow = (const byte *)vs.getBackPixels(0, y);
-		const byte *fgRow = (const byte *)vs.getPixels(0, y);
+		int srcY = h - 1 - y; // flip: texture row 0 = game bottom
+		const byte *bgRow = (const byte *)vs.getBackPixels(0, srcY);
+		const byte *fgRow = (const byte *)vs.getPixels(0, srcY);
 		uint8_t *bgOut = &snap->backgroundRGBA[(y * w) * 4];
 		uint8_t *fgOut = &snap->compositeRGBA[(y * w) * 4];
 		for (int x = 0; x < w; x++) {
@@ -105,6 +108,30 @@ void dioramaExtract() {
 			fgOut[x * 4 + 2] = palette[fgIdx * 3 + 2];
 			// Mark actor pixels: alpha=255 where foreground differs from background
 			fgOut[x * 4 + 3] = (bgIdx != fgIdx) ? 255 : 0;
+		}
+	}
+
+	// Extract verb panel from the full composite screen (below the game area)
+	{
+		Scumm::VirtScreen &verbVs = engine->_virtscr[Scumm::kVerbVirtScreen];
+		uint16_t vw = verbVs.w;
+		uint16_t vh = verbVs.h;
+		if (vw > DIORAMA_MAX_SCREEN_W) vw = DIORAMA_MAX_SCREEN_W;
+		if (vh > 80) vh = 80;
+		snap->verbWidth = vw;
+		snap->verbHeight = vh;
+		if (vw > 0 && vh > 0) {
+			for (int y = 0; y < vh; y++) {
+				const byte *row = (const byte *)verbVs.getPixels(0, vh - 1 - y);
+				uint8_t *out = &snap->verbRGBA[(y * vw) * 4];
+				for (int x = 0; x < vw; x++) {
+					byte idx = row[x];
+					out[x * 4 + 0] = palette[idx * 3 + 0];
+					out[x * 4 + 1] = palette[idx * 3 + 1];
+					out[x * 4 + 2] = palette[idx * 3 + 2];
+					out[x * 4 + 3] = 255;
+				}
+			}
 		}
 	}
 

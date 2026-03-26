@@ -72,6 +72,7 @@ struct DioramaRenderer {
 
 	GLuint backgroundTex;
 	GLuint compositeTex;    // actor diff layer
+	GLuint verbTex;         // verb/inventory panel
 	GLuint zplaneTex[DIORAMA_MAX_ZPLANES];
 
 	GLuint quadVBO; // generic unit quad, transformed via MVP
@@ -185,6 +186,7 @@ void dioramaRendererInit() {
 
 	g_diorama.backgroundTex = createTexture();
 	g_diorama.compositeTex = createTexture();
+	g_diorama.verbTex = createTexture();
 	for (int i = 0; i < DIORAMA_MAX_ZPLANES; i++)
 		g_diorama.zplaneTex[i] = createTexture();
 
@@ -248,6 +250,13 @@ void dioramaRendererDraw(const float *viewProj) {
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
 			snap->compositeRGBA);
 
+		// Verb panel texture
+		if (snap->verbWidth > 0 && snap->verbHeight > 0) {
+			glBindTexture(GL_TEXTURE_2D, g_diorama.verbTex);
+			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, snap->verbWidth, snap->verbHeight,
+				0, GL_RGBA, GL_UNSIGNED_BYTE, snap->verbRGBA);
+		}
+
 		// Z-plane textures
 		for (int z = 1; z < snap->numZPlanes && z < DIORAMA_MAX_ZPLANES; z++) {
 			glBindTexture(GL_TEXTURE_2D, g_diorama.zplaneTex[z]);
@@ -278,19 +287,9 @@ void dioramaRendererDraw(const float *viewProj) {
 			viewProj, model, g_diorama.backgroundTex);
 	}
 
-	// === Z-plane foreground layers (back to front) ===
-	glEnable(GL_DEPTH_TEST);
-	for (int z = snap->numZPlanes - 1; z >= 1; z--) {
-		// Space z-planes evenly between back wall and front
-		float zFrac = 1.0f - (float)(z) / (float)(snap->numZPlanes);
-		float zPos = -DIORAMA_DISTANCE - DIORAMA_DEPTH + zFrac * DIORAMA_DEPTH;
-		float model[16];
-		mat4_identity(model);
-		mat4_translate(model, -hw, DIORAMA_CENTER_Y, zPos);
-		mat4_scale(model, dioWidth, dioHeight, 1.0f);
-		drawQuad(g_diorama.alphaProgram, g_diorama.alphaMVPLoc, g_diorama.alphaTexLoc,
-			viewProj, model, g_diorama.zplaneTex[z]);
-	}
+	// === Z-plane foreground layers ===
+	// TODO: Z-planes cause artifacts — disabled until mask extraction is fixed
+	// (doubled elements, black triangles from garbage mask data)
 
 	// === Actor/foreground diff layer ===
 	// Place actors about 40% forward from the back wall
@@ -302,6 +301,21 @@ void dioramaRendererDraw(const float *viewProj) {
 		mat4_scale(model, dioWidth, dioHeight, 1.0f);
 		drawQuad(g_diorama.alphaProgram, g_diorama.alphaMVPLoc, g_diorama.alphaTexLoc,
 			viewProj, model, g_diorama.compositeTex);
+	}
+
+	// === Verb/inventory panel ===
+	// Render as a flat panel below the diorama, at the back wall depth
+	if (snap->verbWidth > 0 && snap->verbHeight > 0) {
+		float verbAspect = (float)snap->verbWidth / (float)snap->verbHeight;
+		float verbW = dioWidth * 0.8f; // slightly narrower than diorama
+		float verbH = verbW / verbAspect;
+		float model[16];
+		mat4_identity(model);
+		mat4_translate(model, -verbW / 2.0f, DIORAMA_CENTER_Y - verbH - 0.05f,
+			-DIORAMA_DISTANCE - DIORAMA_DEPTH);
+		mat4_scale(model, verbW, verbH, 1.0f);
+		drawQuad(g_diorama.opaqueProgram, g_diorama.opaqueMVPLoc, g_diorama.opaqueTexLoc,
+			viewProj, model, g_diorama.verbTex);
 	}
 }
 
