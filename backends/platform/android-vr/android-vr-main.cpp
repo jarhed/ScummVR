@@ -45,12 +45,6 @@
 #include "common/events.h"
 #include "backends/platform/android/android.h"
 
-// Diorama mode
-#include "backends/platform/android-vr/diorama-data.h"
-extern void dioramaRendererInit();
-extern void dioramaRendererDraw(const float *viewProj);
-extern bool dioramaHasData();
-
 #define LOG_TAG "ScummVM_VR_Main"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -641,9 +635,6 @@ static void processInput(VRApp *a) {
 	}
 }
 
-// Diorama mode flag (defined later with other ScummVM integration globals)
-static bool g_dioramaMode = true;
-
 static void renderFrame(VRApp *a) {
 	if (!a->sessionRunning) return;
 
@@ -696,11 +687,7 @@ static void renderFrame(VRApp *a) {
 			mat4_multiply(vpMat, projMat, viewMat);
 
 			// Draw the virtual screen
-			if (g_dioramaMode && dioramaHasData()) {
-				dioramaRendererDraw(vpMat);
-			} else {
-				drawScreen(a, vpMat);
-			}
+			drawScreen(a, vpMat);
 
 			XrSwapchainImageReleaseInfo ri = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
 			xrReleaseSwapchainImage(a->swapchains[v], &ri);
@@ -740,12 +727,6 @@ static VRApp *g_vrApp = nullptr;
 
 // Shared texture ID — read by AndroidVRGraphicsManager on ScummVM thread
 uint32_t g_vrSharedTexture = 0;
-
-static DioramaSharedState s_dioramaState;
-DioramaSharedState *g_dioramaState = nullptr;
-
-// Diorama shared state — written by ScummVM thread, read by VR thread
-// (Diorama globals are earlier in the file, before renderFrame)
 
 // Cached class loader and method for finding app classes from native threads
 static jobject g_classLoader = nullptr;
@@ -911,11 +892,6 @@ extern "C" void android_main(android_app *app) {
 
 	initSharedTexture(&a);
 	initScreenQuad(&a);
-
-	// Initialize diorama mode
-	s_dioramaState.init();
-	g_dioramaState = &s_dioramaState;
-	dioramaRendererInit();
 
 	// Start ScummVM on a background thread
 	pthread_create(&a.scummvmThread, nullptr, scummvmThreadFunc, &a);

@@ -42,9 +42,6 @@
 // From android-vr-main.cpp — shared texture ID for VR rendering
 extern uint32_t g_vrSharedTexture;
 
-// Diorama data extraction
-extern void dioramaExtract();
-
 #define LOG_TAG "ScummVM_VR"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -222,20 +219,18 @@ bool AndroidVRGraphicsManager::loadVideoMode(uint requestedWidth, uint requested
 }
 
 void AndroidVRGraphicsManager::refreshScreen() {
-	// ScummVM just rendered to FBO 0 (PBuffer backbuffer).
+	// ScummVM just rendered to FBO 0 (PBuffer backbuffer, 640x480).
 	// Copy it to the shared texture FBO so the VR thread can display it.
 	if (_sceneFBO) {
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _sceneFBO);
+		// Flip Y: OpenGL FBO has Y=0 at bottom, but the VR quad expects Y=0 at top
 		glBlitFramebuffer(0, 0, _sceneWidth, _sceneHeight,
 			0, _sceneHeight, _sceneWidth, 0,
 			GL_COLOR_BUFFER_BIT, GL_NEAREST);
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-		glFinish();
+		glFinish(); // Ensure texture is ready before VR thread reads it
 	}
-
-	// Extract diorama data from the SCUMM engine for 3D rendering
-	dioramaExtract();
 }
 
 void AndroidVRGraphicsManager::renderEye(int eye, const float *eyePose, const float *eyeFov) {
