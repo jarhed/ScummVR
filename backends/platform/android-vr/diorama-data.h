@@ -126,6 +126,10 @@ inline float gameYToDioramaHeight(int16_t gameY, uint16_t screenHeight, uint8_t 
 	return normalizedScale * DIORAMA_HEIGHT * 0.5f; // half the back wall height
 }
 
+// Cursor position for drawing in diorama (set by VR input, read by extractor)
+extern int g_dioramaCursorX;
+extern int g_dioramaCursorY;
+
 // Global shared state pointer (set by android_main, read by graphics manager)
 extern DioramaSharedState *g_dioramaState;
 

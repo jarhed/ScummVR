@@ -570,18 +570,7 @@ static void processInput(VRApp *a) {
 			if (hitX >= -hw && hitX <= hw && relY >= 0 && relY <= 2 * hh) {
 				// Compute UV on the screen quad
 				float u = 1.0f - (hitX + hw) / (2 * hw); // mirrored X
-				float v;
-				if (g_dioramaMode) {
-					v = 1.0f - relY / (2 * hh); // diorama: texture is Y-flipped at source
-				} else {
-					v = relY / (2 * hh); // flat screen: texture is Y-flipped via blit
-				}
-
-				// Crosshair at the raw world-space hit point
-				a->laserEndX = -hitX; // mirror X to match flipped texture
-				a->laserEndY = hitY;  // Y is correct since texture matches world orientation
-				a->laserEndZ = screenZ + 0.005f;
-				a->laserActive = true;
+				float v = relY / (2 * hh);
 				int mx = (int)(u * 1920);
 				int my = (int)(v * 1080);
 
@@ -589,6 +578,10 @@ static void processInput(VRApp *a) {
 					a->mouseX = mx;
 					a->mouseY = my;
 					a->mouseValid = true;
+
+					// Store cursor UV for diorama cursor rendering
+					g_dioramaCursorX = (int)(u * 320);
+					g_dioramaCursorY = (int)(v * 200);
 
 					// Push mouse move event to ScummVM
 					if (g_system) {
@@ -876,6 +869,8 @@ uint32_t g_vrSharedTexture = 0;
 
 static DioramaSharedState s_dioramaState;
 DioramaSharedState *g_dioramaState = nullptr;
+int g_dioramaCursorX = 0;
+int g_dioramaCursorY = 0;
 
 // Diorama shared state — written by ScummVM thread, read by VR thread
 // (Diorama globals are earlier in the file, before renderFrame)

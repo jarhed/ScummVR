@@ -87,12 +87,9 @@ void dioramaExtract() {
 	g_system->getPaletteManager()->grabPalette(palette, 0, 256);
 
 	// Extract background and composite (game area only)
-	// Flip Y so that row 0 of the texture = bottom of game image
-	// (matches OpenGL texture convention where row 0 is at the bottom)
 	for (int y = 0; y < h; y++) {
-		int srcY = h - 1 - y; // flip: texture row 0 = game bottom
-		const byte *bgRow = (const byte *)vs.getBackPixels(0, srcY);
-		const byte *fgRow = (const byte *)vs.getPixels(0, srcY);
+		const byte *bgRow = (const byte *)vs.getBackPixels(0, y);
+		const byte *fgRow = (const byte *)vs.getPixels(0, y);
 		uint8_t *bgOut = &snap->backgroundRGBA[(y * w) * 4];
 		uint8_t *fgOut = &snap->compositeRGBA[(y * w) * 4];
 		for (int x = 0; x < w; x++) {
@@ -122,7 +119,7 @@ void dioramaExtract() {
 		snap->verbHeight = vh;
 		if (vw > 0 && vh > 0) {
 			for (int y = 0; y < vh; y++) {
-				const byte *row = (const byte *)verbVs.getPixels(0, vh - 1 - y);
+				const byte *row = (const byte *)verbVs.getPixels(0, y);
 				uint8_t *out = &snap->verbRGBA[(y * vw) * 4];
 				for (int x = 0; x < vw; x++) {
 					byte idx = row[x];
@@ -183,6 +180,28 @@ void dioramaExtract() {
 					out[idx + 1] = 0;
 					out[idx + 2] = 0;
 					out[idx + 3] = 0;
+				}
+			}
+		}
+	}
+
+	// Draw cursor into composite texture
+	{
+		int cx = g_dioramaCursorX;
+		int cy = g_dioramaCursorY;
+		int size = 3; // cursor radius in pixels
+		for (int dy = -size; dy <= size; dy++) {
+			for (int dx = -size; dx <= size; dx++) {
+				// Draw a crosshair shape
+				if (dx != 0 && dy != 0) continue;
+				int px = cx + dx;
+				int py = cy + dy;
+				if (px >= 0 && px < w && py >= 0 && py < h) {
+					int idx = (py * w + px) * 4;
+					snap->compositeRGBA[idx + 0] = 255;
+					snap->compositeRGBA[idx + 1] = 255;
+					snap->compositeRGBA[idx + 2] = 255;
+					snap->compositeRGBA[idx + 3] = 255;
 				}
 			}
 		}
