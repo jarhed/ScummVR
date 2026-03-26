@@ -89,7 +89,8 @@ struct DioramaRenderer {
 	GLuint depthMeshIBO;
 	int depthMeshIndexCount;
 	bool hasDepthMap;
-	uint8_t depthData[320 * 144]; // depth map data
+	uint16_t depthW, depthH;
+	uint8_t depthData[800 * 200]; // depth map data (max room size)
 
 	uint8_t lastRoom;
 	uint32_t lastFrame;
@@ -259,7 +260,7 @@ static void loadDepthMap(const char *path) {
 	uint16_t dw, dh;
 	fread(&dw, 2, 1, f);
 	fread(&dh, 2, 1, f);
-	if (dw != 320 || dh > 200) {
+	if (dw == 0 || dh == 0 || dw > 800 || dh > 200 || (int)dw * dh > 800 * 200) {
 		LOGE("Bad depth map size: %dx%d", dw, dh);
 		fclose(f);
 		g_diorama.hasDepthMap = false;
@@ -268,6 +269,8 @@ static void loadDepthMap(const char *path) {
 
 	fread(g_diorama.depthData, dw * dh, 1, f);
 	fclose(f);
+	g_diorama.depthW = dw;
+	g_diorama.depthH = dh;
 	LOGI("Loaded depth map %dx%d from %s", dw, dh);
 
 	// Build displacement mesh: a grid of vertices with Z displaced by depth
@@ -280,7 +283,7 @@ static void loadDepthMap(const char *path) {
 	float hw = DIORAMA_WIDTH / 2.0f;
 	float aspect = (float)dw / (float)dh;
 	float dioH = DIORAMA_WIDTH / aspect;
-	float maxDisplace = DIORAMA_DEPTH * 0.8f; // max forward displacement
+	float maxDisplace = DIORAMA_DEPTH * 1.2f; // strong forward displacement for dramatic 3D
 
 	int vi = 0;
 	for (int y = 0; y <= gh; y++) {
@@ -482,14 +485,25 @@ void dioramaRendererDraw(const float *viewProj) {
 	float pivotY = DIORAMA_CENTER_Y + dioHeight * 0.5f;
 	float pivotZ = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.5f;
 	mat4_translate(dioBase, 0, pivotY, pivotZ);
-	// Rotate around X axis (tilt back)
+	// Rotate around X axis (base tilt + user grab)
 	{
-		float angle = 0.44f; // ~25 degrees
-		float c = cosf(angle), s = sinf(angle);
+		float angleX = 0.44f + g_dioramaRotX; // base ~25deg + user rotation
+		float c = cosf(angleX), s = sinf(angleX);
 		float rot[16];
 		mat4_identity(rot);
 		rot[5] = c; rot[6] = s;
 		rot[9] = -s; rot[10] = c;
+		float tmp[16];
+		mat4_multiply(tmp, dioBase, rot);
+		memcpy(dioBase, tmp, 64);
+	}
+	// Rotate around Y axis (user grab horizontal)
+	if (g_dioramaRotY != 0.0f) {
+		float c = cosf(g_dioramaRotY), s = sinf(g_dioramaRotY);
+		float rot[16];
+		mat4_identity(rot);
+		rot[0] = c; rot[2] = -s;
+		rot[8] = s; rot[10] = c;
 		float tmp[16];
 		mat4_multiply(tmp, dioBase, rot);
 		memcpy(dioBase, tmp, 64);

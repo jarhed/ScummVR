@@ -144,6 +144,11 @@ struct VRApp {
 	float laserStartX, laserStartY, laserStartZ;
 	float laserEndX, laserEndY, laserEndZ;
 	bool laserActive;
+
+	// Scene rotation (trigger+grip to rotate)
+	float sceneRotX, sceneRotY;
+	bool grabbing;
+	float grabStartX, grabStartY;
 };
 
 // ---- Matrix math ----
@@ -673,6 +678,31 @@ static void processInput(VRApp *a) {
 			sys->pushEvent(evUp);
 		}
 	}
+
+	// Scene rotation: hold trigger+grip on right controller to grab and rotate
+	bool isGrabbing = a->triggerValues[1] > 0.5f && a->gripValues[1] > 0.5f;
+	XrPosef &rPose = a->handPoses[1];
+	float handX = rPose.position.x;
+	float handY = rPose.position.y;
+
+	if (isGrabbing && !a->grabbing) {
+		// Start grab
+		a->grabbing = true;
+		a->grabStartX = handX;
+		a->grabStartY = handY;
+	} else if (isGrabbing && a->grabbing) {
+		// Dragging — rotate scene
+		float dx = handX - a->grabStartX;
+		float dy = handY - a->grabStartY;
+		a->sceneRotY += dx * 3.0f;
+		a->sceneRotX += dy * 3.0f;
+		g_dioramaRotX = a->sceneRotX;
+		g_dioramaRotY = a->sceneRotY;
+		a->grabStartX = handX;
+		a->grabStartY = handY;
+	} else {
+		a->grabbing = false;
+	}
 }
 
 // Laser pointer shader (simple colored line, no texture)
@@ -871,6 +901,8 @@ static DioramaSharedState s_dioramaState;
 DioramaSharedState *g_dioramaState = nullptr;
 int g_dioramaCursorX = 0;
 int g_dioramaCursorY = 0;
+float g_dioramaRotX = 0;
+float g_dioramaRotY = 0;
 
 // Diorama shared state — written by ScummVM thread, read by VR thread
 // (Diorama globals are earlier in the file, before renderFrame)

@@ -132,6 +132,10 @@ inline float gameYToDioramaHeight(int16_t gameY, uint16_t screenHeight, uint8_t 
 extern int g_dioramaCursorX;
 extern int g_dioramaCursorY;
 
+// Scene rotation from grab gesture (set by VR input, read by renderer)
+extern float g_dioramaRotX;
+extern float g_dioramaRotY;
+
 // Global shared state pointer (set by android_main, read by graphics manager)
 extern DioramaSharedState *g_dioramaState;
 
