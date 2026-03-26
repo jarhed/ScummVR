@@ -556,9 +556,36 @@ void dioramaRendererDraw(const float *viewProj) {
 	// (doubled elements, black triangles from garbage mask data)
 
 	// === Actor/foreground diff layer ===
-	// Place just in front of the depth mesh so actors aren't inside the geometry
-	{
-		float zPos = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.15f; // near the front
+	if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {
+		// Render actors ON the depth mesh — second pass with alpha testing
+		// This places actors at the correct 3D depth within the room
+		glUseProgram(g_diorama.alphaProgram);
+		glUniformMatrix4fv(g_diorama.alphaMVPLoc, 1, GL_FALSE, dioVP);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, g_diorama.compositeTex);
+		glUniform1i(g_diorama.alphaTexLoc, 0);
+
+		// Slight Z offset to prevent z-fighting with the background mesh
+		glEnable(GL_POLYGON_OFFSET_FILL);
+		glPolygonOffset(-1.0f, -1.0f);
+
+		glBindBuffer(GL_ARRAY_BUFFER, g_diorama.depthMeshVBO);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.depthMeshIBO);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+		glDrawElements(GL_TRIANGLES, g_diorama.depthMeshIndexCount, GL_UNSIGNED_SHORT, 0);
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(1);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+		glDisable(GL_POLYGON_OFFSET_FILL);
+		glUseProgram(0);
+	} else {
+		// Fallback: flat actor layer
+		float zPos = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.15f;
 		float model[16];
 		mat4_identity(model);
 		mat4_translate(model, -hw, DIORAMA_CENTER_Y, zPos);
