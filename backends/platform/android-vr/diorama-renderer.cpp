@@ -30,6 +30,7 @@
 #include <android/log.h>
 #include <cstring>
 #include <cmath>
+#include <cstdio>
 
 #define LOG_TAG "ScummVR_Diorama"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -64,6 +65,10 @@ static const char *kDioramaAlphaFrag =
 	"    color = c;\n"
 	"}\n";
 
+// Depth mesh grid resolution
+#define DEPTH_GRID_W 64
+#define DEPTH_GRID_H 32
+
 struct DioramaRenderer {
 	GLuint opaqueProgram;
 	GLuint alphaProgram;
@@ -76,6 +81,15 @@ struct DioramaRenderer {
 	GLuint zplaneTex[DIORAMA_MAX_ZPLANES];
 
 	GLuint quadVBO; // generic unit quad, transformed via MVP
+	GLuint floorVBO;
+	int floorVertCount;
+
+	// Depth displacement mesh
+	GLuint depthMeshVBO;
+	GLuint depthMeshIBO;
+	int depthMeshIndexCount;
+	bool hasDepthMap;
+	uint8_t depthData[320 * 144]; // depth map data
 
 	uint8_t lastRoom;
 	uint32_t lastFrame;
@@ -184,6 +198,13 @@ void dioramaRendererInit() {
 	glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
+	glGenBuffers(1, &g_diorama.floorVBO);
+	g_diorama.floorVertCount = 0;
+	glGenBuffers(1, &g_diorama.depthMeshVBO);
+	glGenBuffers(1, &g_diorama.depthMeshIBO);
+	g_diorama.depthMeshIndexCount = 0;
+	g_diorama.hasDepthMap = false;
+
 	g_diorama.backgroundTex = createTexture();
 	g_diorama.compositeTex = createTexture();
 	g_diorama.verbTex = createTexture();
@@ -226,6 +247,167 @@ bool dioramaHasData() {
 	return snap->valid && snap->screenWidth > 0 && snap->screenHeight > 0;
 }
 
+// Load depth map from file and build displacement mesh
+static void loadDepthMap(const char *path) {
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		LOGI("No depth map at %s", path);
+		g_diorama.hasDepthMap = false;
+		return;
+	}
+
+	uint16_t dw, dh;
+	fread(&dw, 2, 1, f);
+	fread(&dh, 2, 1, f);
+	if (dw != 320 || dh > 200) {
+		LOGE("Bad depth map size: %dx%d", dw, dh);
+		fclose(f);
+		g_diorama.hasDepthMap = false;
+		return;
+	}
+
+	fread(g_diorama.depthData, dw * dh, 1, f);
+	fclose(f);
+	LOGI("Loaded depth map %dx%d from %s", dw, dh);
+
+	// Build displacement mesh: a grid of vertices with Z displaced by depth
+	int gw = DEPTH_GRID_W, gh = DEPTH_GRID_H;
+	int numVerts = (gw + 1) * (gh + 1);
+	int numIndices = gw * gh * 6;
+	float *verts = new float[numVerts * 5]; // xyz + uv
+	uint16_t *indices = new uint16_t[numIndices];
+
+	float hw = DIORAMA_WIDTH / 2.0f;
+	float aspect = (float)dw / (float)dh;
+	float dioH = DIORAMA_WIDTH / aspect;
+	float maxDisplace = DIORAMA_DEPTH * 0.8f; // max forward displacement
+
+	int vi = 0;
+	for (int y = 0; y <= gh; y++) {
+		for (int x = 0; x <= gw; x++) {
+			float u = (float)x / (float)gw;
+			float v = (float)y / (float)gh;
+
+			// Sample depth map
+			int dx = (int)(u * (dw - 1));
+			int dy = (int)(v * (dh - 1));
+			if (dx >= dw) dx = dw - 1;
+			if (dy >= dh) dy = dh - 1;
+			float depth = (float)g_diorama.depthData[dy * dw + dx] / 255.0f;
+
+			// World position: back wall + forward displacement based on depth
+			// depth 0 = far (black in depth map) = stays on back wall
+			// depth 1 = near (white) = pushed forward
+			float wx = -hw + u * DIORAMA_WIDTH;
+			float wy = DIORAMA_CENTER_Y + (1.0f - v) * dioH;
+			float wz = -DIORAMA_DISTANCE - DIORAMA_DEPTH + depth * maxDisplace;
+
+			verts[vi++] = wx;
+			verts[vi++] = wy;
+			verts[vi++] = wz;
+			verts[vi++] = u;
+			verts[vi++] = v;
+		}
+	}
+
+	int ii = 0;
+	for (int y = 0; y < gh; y++) {
+		for (int x = 0; x < gw; x++) {
+			int tl = y * (gw + 1) + x;
+			int tr = tl + 1;
+			int bl = (y + 1) * (gw + 1) + x;
+			int br = bl + 1;
+			indices[ii++] = tl; indices[ii++] = bl; indices[ii++] = tr;
+			indices[ii++] = tr; indices[ii++] = bl; indices[ii++] = br;
+		}
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, g_diorama.depthMeshVBO);
+	glBufferData(GL_ARRAY_BUFFER, numVerts * 5 * sizeof(float), verts, GL_STATIC_DRAW);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.depthMeshIBO);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, numIndices * sizeof(uint16_t), indices, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	g_diorama.depthMeshIndexCount = numIndices;
+	g_diorama.hasDepthMap = true;
+
+	delete[] verts;
+	delete[] indices;
+
+	LOGI("Built depth mesh: %d verts, %d indices", numVerts, numIndices);
+}
+
+// Build 3D floor geometry from walk boxes
+static void buildFloorGeometry(const DioramaSnapshot *snap) {
+	if (snap->numBoxes == 0) {
+		g_diorama.floorVertCount = 0;
+		return;
+	}
+
+	float w = (float)snap->screenWidth;
+	float h = (float)snap->screenHeight;
+	float hw = DIORAMA_WIDTH / 2.0f;
+	float aspect = w / h;
+	float dioHeight = DIORAMA_WIDTH / aspect;
+
+	// Find Y range of walk boxes for depth mapping
+	float minY = 9999, maxY = -9999;
+	for (int i = 0; i < snap->numBoxes; i++) {
+		float ys[] = { (float)snap->boxes[i].ulY, (float)snap->boxes[i].urY,
+		               (float)snap->boxes[i].llY, (float)snap->boxes[i].lrY };
+		for (int j = 0; j < 4; j++) {
+			if (ys[j] < minY) minY = ys[j];
+			if (ys[j] > maxY) maxY = ys[j];
+		}
+	}
+	float yRange = maxY - minY;
+	if (yRange < 1.0f) yRange = 1.0f;
+
+	// Each walk box = 2 triangles = 6 vertices, 5 floats each (pos xyz + uv)
+	int maxVerts = snap->numBoxes * 6;
+	float *verts = new float[maxVerts * 5];
+	int vi = 0;
+
+	auto addVert = [&](float gameX, float gameY) {
+		// X: map game X to diorama X
+		float x = (gameX / w - 0.5f) * DIORAMA_WIDTH;
+		// Z: map game Y to depth (higher game Y = closer = less negative Z)
+		float zNorm = (gameY - minY) / yRange; // 0=back, 1=front
+		float z = -DIORAMA_DISTANCE - DIORAMA_DEPTH + zNorm * DIORAMA_DEPTH;
+		// Y: floor level
+		float y = DIORAMA_CENTER_Y;
+		// UV: project background texture
+		float u = gameX / w;
+		float v = gameY / h;
+
+		verts[vi++] = x;
+		verts[vi++] = y;
+		verts[vi++] = z;
+		verts[vi++] = u;
+		verts[vi++] = v;
+	};
+
+	for (int i = 0; i < snap->numBoxes; i++) {
+		const DioramaWalkBox &box = snap->boxes[i];
+		// Triangle 1: ul, ur, ll
+		addVert(box.ulX, box.ulY);
+		addVert(box.urX, box.urY);
+		addVert(box.llX, box.llY);
+		// Triangle 2: ur, lr, ll
+		addVert(box.urX, box.urY);
+		addVert(box.lrX, box.lrY);
+		addVert(box.llX, box.llY);
+	}
+
+	g_diorama.floorVertCount = vi / 5;
+	glBindBuffer(GL_ARRAY_BUFFER, g_diorama.floorVBO);
+	glBufferData(GL_ARRAY_BUFFER, vi * sizeof(float), verts, GL_DYNAMIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	delete[] verts;
+}
+
 void dioramaRendererDraw(const float *viewProj) {
 	if (!g_diorama.initialized || !g_dioramaState)
 		return;
@@ -266,8 +448,24 @@ void dioramaRendererDraw(const float *viewProj) {
 
 		if (snap->currentRoom != g_diorama.lastRoom) {
 			g_diorama.lastRoom = snap->currentRoom;
-			LOGI("Diorama room %d: %d boxes, %d z-planes",
-				snap->currentRoom, snap->numBoxes, snap->numZPlanes);
+			buildFloorGeometry(snap);
+			// Try to load a depth map for this room
+			// Check app data dir first, then sdcard
+			const char *dirs[] = {
+				"/data/user/0/org.scummvm.scummvm.vr.debug/files",
+				"/sdcard/scummvm_games/dott",
+				nullptr
+			};
+			g_diorama.hasDepthMap = false;
+			for (const char **dir = dirs; *dir && !g_diorama.hasDepthMap; dir++) {
+				char depthPath[256];
+				snprintf(depthPath, sizeof(depthPath), "%s/dott_room%d_depth.bin",
+					*dir, snap->currentRoom);
+				loadDepthMap(depthPath);
+			}
+			LOGI("Diorama room %d: %d boxes, depth=%s",
+				snap->currentRoom, snap->numBoxes,
+				g_diorama.hasDepthMap ? "YES" : "no");
 		}
 	}
 
@@ -277,14 +475,58 @@ void dioramaRendererDraw(const float *viewProj) {
 	float dioHeight = dioWidth / aspect;
 	float hw = dioWidth / 2.0f;
 
-	// === Back wall ===
-	{
+	float dioVP[16];
+	memcpy(dioVP, viewProj, 64); // no tilt for now
+
+	// === Background: depth-displaced mesh or flat back wall ===
+	if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {
+		// Render depth-displaced mesh
+		glUseProgram(g_diorama.opaqueProgram);
+		glUniformMatrix4fv(g_diorama.opaqueMVPLoc, 1, GL_FALSE, dioVP);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, g_diorama.backgroundTex);
+		glUniform1i(g_diorama.opaqueTexLoc, 0);
+
+		glBindBuffer(GL_ARRAY_BUFFER, g_diorama.depthMeshVBO);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.depthMeshIBO);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+		glDrawElements(GL_TRIANGLES, g_diorama.depthMeshIndexCount, GL_UNSIGNED_SHORT, 0);
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(1);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		glUseProgram(0);
+	} else {
+		// Fallback: flat back wall
 		float model[16];
 		mat4_identity(model);
 		mat4_translate(model, -hw, DIORAMA_CENTER_Y, -DIORAMA_DISTANCE - DIORAMA_DEPTH);
 		mat4_scale(model, dioWidth, dioHeight, 1.0f);
 		drawQuad(g_diorama.opaqueProgram, g_diorama.opaqueMVPLoc, g_diorama.opaqueTexLoc,
-			viewProj, model, g_diorama.backgroundTex);
+			dioVP, model, g_diorama.backgroundTex);
+	}
+
+	// (Walk box floor geometry disabled — replaced by angled floor above)
+	if (false && g_diorama.floorVertCount > 0) {
+		glUseProgram(g_diorama.opaqueProgram);
+		glUniformMatrix4fv(g_diorama.opaqueMVPLoc, 1, GL_FALSE, dioVP);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, g_diorama.backgroundTex);
+		glUniform1i(g_diorama.opaqueTexLoc, 0);
+
+		glBindBuffer(GL_ARRAY_BUFFER, g_diorama.floorVBO);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+		glDrawArrays(GL_TRIANGLES, 0, g_diorama.floorVertCount);
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(1);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glUseProgram(0);
 	}
 
 	// === Z-plane foreground layers ===
@@ -292,30 +534,30 @@ void dioramaRendererDraw(const float *viewProj) {
 	// (doubled elements, black triangles from garbage mask data)
 
 	// === Actor/foreground diff layer ===
-	// Place actors about 40% forward from the back wall
+	// Place just in front of the depth mesh so actors aren't inside the geometry
 	{
-		float zPos = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.6f;
+		float zPos = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.15f; // near the front
 		float model[16];
 		mat4_identity(model);
 		mat4_translate(model, -hw, DIORAMA_CENTER_Y, zPos);
 		mat4_scale(model, dioWidth, dioHeight, 1.0f);
 		drawQuad(g_diorama.alphaProgram, g_diorama.alphaMVPLoc, g_diorama.alphaTexLoc,
-			viewProj, model, g_diorama.compositeTex);
+			dioVP, model, g_diorama.compositeTex);
 	}
 
 	// === Verb/inventory panel ===
-	// Render as a flat panel below the diorama, at the back wall depth
+	// Render below the diorama, at the front so it's not occluded by depth mesh
 	if (snap->verbWidth > 0 && snap->verbHeight > 0) {
 		float verbAspect = (float)snap->verbWidth / (float)snap->verbHeight;
-		float verbW = dioWidth * 0.8f; // slightly narrower than diorama
+		float verbW = dioWidth * 0.8f;
 		float verbH = verbW / verbAspect;
 		float model[16];
 		mat4_identity(model);
 		mat4_translate(model, -verbW / 2.0f, DIORAMA_CENTER_Y - verbH - 0.05f,
-			-DIORAMA_DISTANCE - DIORAMA_DEPTH);
+			-DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.1f); // near the front
 		mat4_scale(model, verbW, verbH, 1.0f);
 		drawQuad(g_diorama.opaqueProgram, g_diorama.opaqueMVPLoc, g_diorama.opaqueTexLoc,
-			viewProj, model, g_diorama.verbTex);
+			dioVP, model, g_diorama.verbTex);
 	}
 }
 

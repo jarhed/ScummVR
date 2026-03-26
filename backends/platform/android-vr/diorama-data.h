@@ -100,11 +100,13 @@ struct DioramaSharedState {
 	const DioramaSnapshot *getReadBuffer() { return &snapshots[readIndex]; }
 
 	void swapBuffers() {
+		__sync_synchronize(); // memory barrier
 		int w = writeIndex;
 		int r = readIndex;
 		writeIndex = r;
 		readIndex = w;
 		dirty = true;
+		__sync_synchronize(); // memory barrier
 	}
 };
 
