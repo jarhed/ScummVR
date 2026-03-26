@@ -475,8 +475,30 @@ void dioramaRendererDraw(const float *viewProj) {
 	float dioHeight = dioWidth / aspect;
 	float hw = dioWidth / 2.0f;
 
+	// Tilt the diorama back ~25 degrees so viewer looks down at it isometrically
+	float dioBase[16];
+	mat4_identity(dioBase);
+	// Translate to pivot point (center of diorama)
+	float pivotY = DIORAMA_CENTER_Y + dioHeight * 0.5f;
+	float pivotZ = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.5f;
+	mat4_translate(dioBase, 0, pivotY, pivotZ);
+	// Rotate around X axis (tilt back)
+	{
+		float angle = 0.44f; // ~25 degrees
+		float c = cosf(angle), s = sinf(angle);
+		float rot[16];
+		mat4_identity(rot);
+		rot[5] = c; rot[6] = s;
+		rot[9] = -s; rot[10] = c;
+		float tmp[16];
+		mat4_multiply(tmp, dioBase, rot);
+		memcpy(dioBase, tmp, 64);
+	}
+	// Translate back
+	mat4_translate(dioBase, 0, -pivotY, -pivotZ);
+
 	float dioVP[16];
-	memcpy(dioVP, viewProj, 64); // no tilt for now
+	mat4_multiply(dioVP, viewProj, dioBase);
 
 	// === Background: depth-displaced mesh or flat back wall ===
 	if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {

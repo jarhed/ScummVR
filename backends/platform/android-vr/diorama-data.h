@@ -32,7 +32,7 @@
 #define DIORAMA_HEIGHT   1.5f
 #define DIORAMA_DEPTH    1.0f
 #define DIORAMA_DISTANCE 1.5f
-#define DIORAMA_CENTER_Y -0.3f
+#define DIORAMA_CENTER_Y -0.7f
 
 #define DIORAMA_MAX_BOXES 32
 #define DIORAMA_MAX_ZPLANES 8
