@@ -1,214 +1,80 @@
-# ScummVR
+# [ScummVM README](https://www.scummvm.org/) · [![CI](https://github.com/scummvm/scummvm/actions/workflows/ci.yml/badge.svg)](https://github.com/scummvm/scummvm/actions/workflows/ci.yml) [![Translation status](https://translations.scummvm.org/widgets/scummvm/-/scummvm/svg-badge.svg)](https://translations.scummvm.org/engage/scummvm/?utm_source=widget) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md#pull-requests) [![Codacy Badge](https://app.codacy.com/project/badge/Grade/e06e5b18f8464fef859b5a7f78d10357)](https://www.codacy.com/gh/scummvm/scummvm/dashboard?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=scummvm/scummvm&amp;utm_campaign=Badge_Grade)
 
-Play classic point-and-click adventure games in VR on your Meta Quest. Your games appear on a big floating screen in a dark virtual cinema, and you point and click with your Quest controller.
+## About ScummVM
 
-<p align="center">
-  <img src="media/dott_gameplay.gif" alt="Day of the Tentacle gameplay in VR" width="700">
-</p>
+ScummVM allows you to play classic graphic point-and-click adventure games, text adventure games, and RPGs, as long as you already have the game data files. ScummVM replaces the executable files shipped with the games, which means you can now play your favorite games on all your favorite devices.
 
-> **Note:** This has only been tested on a Meta Quest 2. It should work on Quest 3 and Quest Pro but this hasn't been confirmed yet.
+So how did ScummVM get its name? Many of the famous LucasArts adventure games, such as Maniac Mansion and the Monkey Island series, were created using a utility called SCUMM (Script Creation Utility for Maniac Mansion). The ‘VM’ in ScummVM stands for Virtual Machine.
 
-<p align="center">
-  <img src="media/dott_menu.png" alt="ScummVM launcher in VR" width="700">
-</p>
+While ScummVM was originally designed to run LucasArts’ SCUMM games, over time support has been added for many other games: see the full list [on our wiki](https://wiki.scummvm.org/index.php?title=Category:Supported_Games). Noteworthy titles include Broken Sword, Myst and Blade Runner, although there are countless other hidden gems to explore.
 
-## Install (5 minutes)
+For more information, compatibility lists, details on donating, the
+latest release, progress reports and more, please visit the ScummVM [home
+page](https://www.scummvm.org/).
 
-You need a USB cable and a computer with ADB installed.
+## Quickstart
 
-- **Windows:** Download [Android Platform Tools](https://developer.android.com/tools/releases/platform-tools#downloads), unzip it, and open a Command Prompt in that folder
-- **Mac:** `brew install android-platform-tools`
-- **Linux:** `sudo apt install adb`
+For the impatient among you, here is how to get ScummVM running in five simple steps.
 
-### Step 1: Enable Developer Mode on your Quest
+1. Download ScummVM from [our website](https://www.scummvm.org/downloads/) and install it.
 
-1. Install the **Meta Quest app** on your phone
-2. Go to **Menu → Devices → Developer Mode → On**
-3. Restart your Quest
+2. Create a directory on your hard drive and copy the game datafiles from the original media to this directory. Repeat this for every game you want to play.
 
-### Step 2: Install ScummVR
+3. Start ScummVM, choose 'Add game', select the directory containing the game datafiles (do not try to select the datafiles themselves!) and press Choose.
 
-1. Download **[ScummVM-VR.apk](ScummVM-VR.apk)** from this repo
-2. Connect your Quest to your computer with a USB cable
-3. Put on the headset and tap **Allow** when asked about USB debugging
-4. On your computer, run:
-   ```
-   adb install ScummVM-VR.apk
-   ```
+4. The Game Options dialog opens to allow configuration of various settings for the game. These can be reconfigured at any time, but for now everything should be OK at the default settings.
 
-### Step 3: Add a game
+5. Select the game you want to play in the list, and press Start. To play a game next time, skip to step 5, unless you want to add more games.
 
-Copy your game files to the Quest:
-```
-adb push /path/to/my-game/ /sdcard/scummvm_games/my-game/
-```
+>
+> Hint:
+>
+> To add multiple games in one go, press and hold the shift key, then click 'Add game' -- the label will change to 'Mass Add' and if you press it, you are again asked to select a directory, only this time ScummVM will search through all subdirectories for supported games.
 
-For example, if you have Day of the Tentacle:
-```
-adb push ~/games/dott/ /sdcard/scummvm_games/dott/
-```
 
-### Step 4: Play!
 
-1. On your Quest, go to **Apps → Unknown Sources → ScummVM VR**
-2. Point at **Add Game** and pull the trigger
-3. Browse to your game folder and select it
-4. Hit **Start**
+## Reporting a bug
 
-### Using Steam games
+To report a bug, go to the ScummVM [Issue Tracker](https://bugs.scummvm.org/) and log in with your GitHub account.
 
-If you own classic adventure games on Steam, the game files are already on your PC. Just find them and push them to the Quest:
+Please make sure the bug is reproducible, and still occurs in the latest git/[Daily build](https://buildbot.scummvm.org/#/dailybuilds) version. Also check the [compatibility list](https://www.scummvm.org/compatibility/) for that game, to ensure the issue is not already known. Please do not report bugs for games that are not listed as completable on the [Supported Games](https://wiki.scummvm.org/index.php?title=Category:Supported_Games) wiki page, or on the compatibility list. We already know those games have bugs!
 
-**Windows:**
-```
-adb push "C:\Program Files\Steam\steamapps\common\Day of the Tentacle Remastered" /sdcard/scummvm_games/dott/
-adb push "C:\Program Files\Steam\steamapps\common\Indiana Jones and the Fate of Atlantis" /sdcard/scummvm_games/indy4/
-adb push "C:\Program Files\Steam\steamapps\common\The Dig" /sdcard/scummvm_games/dig/
-```
+Please include the following information in the bug report:
 
-**Linux:**
-```
-adb push ~/.steam/steam/steamapps/common/Day\ of\ the\ Tentacle\ Remastered/ /sdcard/scummvm_games/dott/
-adb push ~/.steam/steam/steamapps/common/Full\ Throttle\ Remastered/ /sdcard/scummvm_games/throttle/
-adb push ~/.steam/steam/steamapps/common/Sam\ \&\ Max\ Hit\ the\ Road/ /sdcard/scummvm_games/samnmax/
-```
+- ScummVM version (test the latest git/[Daily build](https://buildbot.scummvm.org/#/dailybuilds))
+- Bug details, including instructions for how to reproduce the bug. If possible, include log files, screenshots, and any other relevant information.
+- Game language
+- Game version (for example, talkie or floppy)
+- Platform and Compiler (for example, Win32, Linux or FreeBSD)
+- An attached saved game, if possible.
+- If this bug only occurred recently, include the last version without the bug, and the first version with the bug. That way we can fix it quicker by looking at the changes made.
 
-**macOS:**
-```
-adb push ~/Library/Application\ Support/Steam/steamapps/common/Day\ of\ the\ Tentacle\ Remastered/ /sdcard/scummvm_games/dott/
-```
+Finally, please report each issue separately; do not file multiple issues on the same ticket. It is difficult to track the status of each individual bug when they aren't on their own tickets.
 
-ScummVM knows how to read the data files from both the original and remastered editions. You don't need the Steam executable — just the game data files.
+## Documentation
 
-### Free games to try
+### User documentation
 
-- [Beneath a Steel Sky](https://www.scummvm.org/games/#games-bass) — free download
-- [Flight of the Amazon Queen](https://www.scummvm.org/games/#games-queen) — free download
-- [Lure of the Temptress](https://www.scummvm.org/games/#games-lure) — free download
+For everything you need to know about how to use ScummVM, see our [user documentation](https://docs.scummvm.org/).
 
-## Controls
+### The ScummVM Wiki
 
-| Controller | Action |
-|---|---|
-| **Right controller** point | Move cursor |
-| **Right trigger** | Left click |
-| **Right grip** | Right click |
-| **B button** | ESC (skip cutscene, open menu) |
-| **Left thumbstick** | Scroll up/down |
-| **Head movement** | Look around |
+[The wiki](https://wiki.scummvm.org/) is the place to go for information about every game supported by ScummVM. If you're a developer, there's also some very handy information in the Developer section.
 
-## Current limitations
+### Changelog
 
-- Only SCUMM engine games (LucasArts adventures) are included in this build — Monkey Island, Day of the Tentacle, Indiana Jones, Sam & Max, Full Throttle, The Dig, etc.
-- Only tested on Quest 2
-- No hand tracking yet (controllers only)
-- Theme files not loaded (the UI looks basic but works fine)
+Our extensive change log is available [here](NEWS.md).
 
-## Building from source
+## SAST Tools
 
-<details>
-<summary>Click to expand build instructions</summary>
-
-### Prerequisites
-
-- Linux (tested on Ubuntu 25.10)
-- Android SDK and NDK 23.2.8568313
-- Java 17 JDK
-- CMake
-
-### Build dependencies
-
-```bash
-export ANDROID_SDK_ROOT=$HOME/android-sdk
-export ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/23.2.8568313
-
-# OpenXR loader
-git clone --depth 1 https://github.com/KhronosGroup/OpenXR-SDK.git
-cd OpenXR-SDK && mkdir build-android && cd build-android
-cmake .. \
-  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 \
-  -DANDROID_STL=c++_shared -DBUILD_TESTS=OFF -DBUILD_API_LAYERS=OFF
-make -j$(nproc) openxr_loader
-cd ../..
-
-# libogg
-git clone --depth 1 https://github.com/xiph/ogg.git
-cd ogg && mkdir build-android && cd build-android
-cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
-  -DCMAKE_INSTALL_PREFIX=$HOME/android-libs -DBUILD_SHARED_LIBS=OFF
-make -j$(nproc) install && cd ../..
-
-# libvorbis (for voice acting in games)
-git clone --depth 1 https://github.com/xiph/vorbis.git
-cd vorbis && mkdir build-android && cd build-android
-cmake .. -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-21 \
-  -DCMAKE_INSTALL_PREFIX=$HOME/android-libs -DBUILD_SHARED_LIBS=OFF \
-  -DOGG_INCLUDE_DIR=$HOME/android-libs/include \
-  -DOGG_LIBRARY=$HOME/android-libs/lib/libogg.a -DBUILD_TESTING=OFF
-make -j$(nproc) install && cd ../..
-```
-
-### Build ScummVR
-
-```bash
-# Configure (use --enable-all-engines for all 2000+ supported games)
-CXXFLAGS="-I$HOME/android-libs/include" \
-LDFLAGS="-L$HOME/android-libs/lib" \
-LIBS="-lvorbisfile -lvorbis -logg" \
-./configure --host=android-arm64-v8a --enable-openxr --enable-vorbis \
-  --disable-all-engines --enable-engine=scumm
-
-# Add OpenXR paths to config.mk
-cat >> config.mk << 'EOF'
-OPENXR_CFLAGS := -I$(HOME)/OpenXR-SDK/include
-OPENXR_LIBS := -L$(HOME)/OpenXR-SDK/build-android/src/loader -lopenxr_loader
-CXXFLAGS += $(OPENXR_CFLAGS)
-LIBS += $(OPENXR_LIBS)
-LIBS += -lGLESv3
-EOF
-
-# Build
-make -j$(nproc)
-
-# Set up VR APK project
-mkdir -p android_project_vr/lib/arm64-v8a
-cp android_project/lib/arm64-v8a/libscummvm.so android_project_vr/lib/arm64-v8a/
-cp OpenXR-SDK/build-android/src/loader/libopenxr_loader.so android_project_vr/lib/arm64-v8a/
-cp $ANDROID_NDK_ROOT/sources/cxx-stl/llvm-libc++/libs/arm64-v8a/libc++_shared.so android_project_vr/lib/arm64-v8a/
-
-# Copy Gradle project files
-cp -r android_project/gradle android_project_vr/
-cp android_project/gradlew android_project_vr/
-cp android_project/settings.gradle android_project_vr/
-cp android_project/gradle.properties android_project_vr/
-cp -r android_project/mainAssets android_project_vr/
-echo "sdk.dir=$ANDROID_SDK_ROOT" > android_project_vr/local.properties
-echo "srcdir=$(pwd)" > android_project_vr/src.properties
-cp dists/android-vr/build.gradle android_project_vr/
-
-# Build APK
-cd android_project_vr && ./gradlew assembleDebug
-
-# Install
-adb install build/outputs/apk/debug/ScummVM-debug.apk
-```
-
-</details>
-
-## How it works
-
-ScummVM runs on a background thread and renders to a shared OpenGL texture. A VR main loop powered by OpenXR displays that texture on a virtual screen quad, rendered once per eye with head tracking. Quest controller aim is converted to mouse position via ray-plane intersection.
-
-## License
-
-GNU General Public License v3.0 (same as [ScummVM](https://www.scummvm.org/)).
+[PVS-Studio](https://pvs-studio.com/en/pvs-studio/?utm_source=github&utm_medium=organic&utm_campaign=open_source) - static analyzer for C, C++, C#, and Java code.
 
 ## Credits
 
-- [ScummVM](https://www.scummvm.org/) — the engine reimplementation project that makes all of this possible
-- [OpenXR](https://www.khronos.org/openxr/) — VR/AR API standard by the Khronos Group
-- [quest_xr](https://github.com/cshenton/quest_xr) — minimal Quest OpenXR reference that helped get this working
-- Built with [Claude Code](https://claude.ai/code)
+A massive thank you to the entire team for making the ScummVM project possible. See the credits [here](AUTHORS)!
+
+-----
+
+> Good Luck and Happy Adventuring\!
+> The ScummVM team.
+> <https://www.scummvm.org/>
