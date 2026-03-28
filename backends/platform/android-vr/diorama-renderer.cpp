@@ -658,43 +658,106 @@ void dioramaRendererDraw(const float *viewProj) {
 	// TODO: Z-planes cause artifacts — disabled until mask extraction is fixed
 	// (doubled elements, black triangles from garbage mask data)
 
-	// === Actor/foreground diff layer ===
-	if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {
-		// Render actors ON the depth mesh — second pass with alpha testing
-		// This places actors at the correct 3D depth within the room
-		glUseProgram(g_diorama.alphaProgram);
-		glUniformMatrix4fv(g_diorama.alphaMVPLoc, 1, GL_FALSE, dioVP);
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, g_diorama.compositeTex);
-		glUniform1i(g_diorama.alphaTexLoc, 0);
+	// === Actor billboards — standing upright as cardboard cutouts ===
+	if (snap->numActors > 0 && g_diorama.hasDepthMap) {
+		float screenW = (float)snap->screenWidth;
+		float screenH = (float)snap->screenHeight;
+		float roomW = (float)snap->roomWidth;
+		// Camera scroll offset
+		float camOffset = 0;
+		if (roomW > screenW)
+			camOffset = (float)snap->cameraX - screenW / 2.0f;
 
-		// Slight Z offset to prevent z-fighting with the background mesh
-		glEnable(GL_POLYGON_OFFSET_FILL);
-		glPolygonOffset(-1.0f, -1.0f);
+		for (int i = 0; i < snap->numActors; i++) {
+			const DioramaSnapshot::ActorInfo &actor = snap->actors[i];
+			if (!actor.visible) continue;
 
-		glBindBuffer(GL_ARRAY_BUFFER, g_diorama.depthMeshVBO);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.depthMeshIBO);
-		glEnableVertexAttribArray(0);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
-		glEnableVertexAttribArray(1);
-		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
-		glDrawElements(GL_TRIANGLES, g_diorama.depthMeshIndexCount, GL_UNSIGNED_SHORT, 0);
-		glDisableVertexAttribArray(0);
-		glDisableVertexAttribArray(1);
-		glBindBuffer(GL_ARRAY_BUFFER, 0);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+			// Convert actor game position to viewport-relative UV
+			float actorScreenX = (float)actor.x - camOffset;
+			float u = actorScreenX / screenW;
 
-		glDisable(GL_POLYGON_OFFSET_FILL);
-		glUseProgram(0);
+			// Skip if actor is off-screen
+			if (u < 0 || u > 1) continue;
+
+			// Actor Y in game coords → depth (sample depth map)
+			float gameU = (float)actor.x / roomW;
+			int dx = (int)(gameU * (g_diorama.depthW - 1));
+			int dy = (int)((float)actor.y / screenH * (g_diorama.depthH - 1));
+			if (dx < 0) dx = 0; if (dx >= g_diorama.depthW) dx = g_diorama.depthW - 1;
+			if (dy < 0) dy = 0; if (dy >= g_diorama.depthH) dy = g_diorama.depthH - 1;
+			float actorDepth = (float)g_diorama.depthData[dy * g_diorama.depthW + dx] / 255.0f;
+
+			// 3D position
+			float wx = -hw + u * DIORAMA_WIDTH;
+			float wz = -DIORAMA_DISTANCE - DIORAMA_DEPTH + actorDepth * DIORAMA_DEPTH * 1.2f + 0.05f; // slightly in front of mesh
+
+			// Actor height based on scale (bigger scale = taller = closer)
+			float actorH = dioHeight * (float)actor.scale / 255.0f * 0.7f;
+			float actorW = actorH * 0.4f; // approximate width
+
+			// Vertical billboard: stands on the floor at the actor's depth
+			// Crop from composite texture: UV region around the actor
+			float cropW = 40.0f / screenW; // ~40 pixels wide crop
+			float cropH = 80.0f / screenH; // ~80 pixels tall crop
+			float cropU = u - cropW / 2.0f;
+			float cropV = (float)actor.y / screenH - cropH; // above the feet
+
+			float verts[] = {
+				// Bottom-left
+				wx - actorW/2, DIORAMA_CENTER_Y,           wz + 0.01f,  cropU, cropV + cropH,
+				// Bottom-right
+				wx + actorW/2, DIORAMA_CENTER_Y,           wz + 0.01f,  cropU + cropW, cropV + cropH,
+				// Top-left
+				wx - actorW/2, DIORAMA_CENTER_Y + actorH,  wz + 0.01f,  cropU, cropV,
+				// Top-right
+				wx + actorW/2, DIORAMA_CENTER_Y + actorH,  wz + 0.01f,  cropU + cropW, cropV,
+			};
+
+			GLuint tmpVBO;
+			glGenBuffers(1, &tmpVBO);
+			glBindBuffer(GL_ARRAY_BUFFER, tmpVBO);
+			glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+
+			glUseProgram(g_diorama.alphaProgram);
+			glUniformMatrix4fv(g_diorama.alphaMVPLoc, 1, GL_FALSE, dioVP);
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, g_diorama.compositeTex);
+			glUniform1i(g_diorama.alphaTexLoc, 0);
+			glEnableVertexAttribArray(0);
+			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
+			glEnableVertexAttribArray(1);
+			glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+			glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+			glDisableVertexAttribArray(0);
+			glDisableVertexAttribArray(1);
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+			glDeleteBuffers(1, &tmpVBO);
+			glUseProgram(0);
+		}
 	} else {
-		// Fallback: flat actor layer
-		float zPos = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.15f;
-		float model[16];
-		mat4_identity(model);
-		mat4_translate(model, -hw, DIORAMA_CENTER_Y, zPos);
-		mat4_scale(model, dioWidth, dioHeight, 1.0f);
-		drawQuad(g_diorama.alphaProgram, g_diorama.alphaMVPLoc, g_diorama.alphaTexLoc,
-			dioVP, model, g_diorama.compositeTex);
+		// Fallback: flat actor layer on mesh or quad
+		if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {
+			glUseProgram(g_diorama.alphaProgram);
+			glUniformMatrix4fv(g_diorama.alphaMVPLoc, 1, GL_FALSE, dioVP);
+			glActiveTexture(GL_TEXTURE0);
+			glBindTexture(GL_TEXTURE_2D, g_diorama.compositeTex);
+			glUniform1i(g_diorama.alphaTexLoc, 0);
+			glEnable(GL_POLYGON_OFFSET_FILL);
+			glPolygonOffset(-1.0f, -1.0f);
+			glBindBuffer(GL_ARRAY_BUFFER, g_diorama.depthMeshVBO);
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.depthMeshIBO);
+			glEnableVertexAttribArray(0);
+			glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
+			glEnableVertexAttribArray(1);
+			glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+			glDrawElements(GL_TRIANGLES, g_diorama.depthMeshIndexCount, GL_UNSIGNED_SHORT, 0);
+			glDisableVertexAttribArray(0);
+			glDisableVertexAttribArray(1);
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+			glDisable(GL_POLYGON_OFFSET_FILL);
+			glUseProgram(0);
+		}
 	}
 
 	// === Verb/inventory panel ===

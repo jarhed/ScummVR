@@ -67,6 +67,15 @@ struct DioramaSnapshot {
 	uint16_t verbWidth, verbHeight;
 	uint8_t verbRGBA[DIORAMA_MAX_SCREEN_W * 80 * 4]; // verb panel is ~56px tall max
 
+	// Per-actor data for billboard rendering
+	struct ActorInfo {
+		int16_t x, y;       // position in game coords (feet)
+		uint8_t scale;      // scale factor (1-255)
+		bool visible;
+	};
+	uint8_t numActors;
+	ActorInfo actors[16];
+
 	// Average scale for depth mapping of the actor diff layer
 	uint8_t avgFrontScale;
 

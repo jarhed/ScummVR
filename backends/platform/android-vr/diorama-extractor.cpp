@@ -132,6 +132,29 @@ void dioramaExtract() {
 		}
 	}
 
+	// Extract per-actor positions for billboard rendering
+	// Use getObjectOrActorXY (public) to get actor positions
+	{
+		int actorCount = 0;
+		// Actor IDs typically start at 1, max ~25 for SCUMM v6
+		for (int id = 1; id < 30 && actorCount < 16; id++) {
+			int ax, ay;
+			if (engine->getObjectOrActorXY(id, ax, ay) == 0) {
+				// Valid actor with position
+				if (ax > 0 && ay > 0 && ax < snap->roomWidth && ay < snap->roomHeight) {
+					snap->actors[actorCount].x = ax;
+					snap->actors[actorCount].y = ay;
+					// Approximate scale from Y position (higher Y = closer = bigger)
+					float yFrac = (float)ay / (float)h;
+					snap->actors[actorCount].scale = (uint8_t)(128 + yFrac * 127);
+					snap->actors[actorCount].visible = true;
+					actorCount++;
+				}
+			}
+		}
+		snap->numActors = actorCount;
+	}
+
 	// Walk boxes
 	int numBoxes = engine->getNumBoxes();
 	if (numBoxes > DIORAMA_MAX_BOXES) numBoxes = DIORAMA_MAX_BOXES;
