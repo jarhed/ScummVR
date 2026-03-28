@@ -208,23 +208,26 @@ void dioramaExtract() {
 		}
 	}
 
-	// Draw cursor into composite texture
+	// Draw cursor into background texture — a bright reticle at the mouse position
 	{
 		int cx = g_dioramaCursorX;
 		int cy = g_dioramaCursorY;
-		int size = 3; // cursor radius in pixels
+		// Draw a diamond reticle
+		int size = 5;
 		for (int dy = -size; dy <= size; dy++) {
 			for (int dx = -size; dx <= size; dx++) {
-				// Draw a crosshair shape
-				if (dx != 0 && dy != 0) continue;
+				// Diamond shape: |dx| + |dy| == size (outline) or crosshair
+				bool isDiamond = (abs(dx) + abs(dy) == size);
+				bool isCross = (dx == 0 || dy == 0) && abs(dx) + abs(dy) <= size;
+				if (!isDiamond && !isCross) continue;
 				int px = cx + dx;
 				int py = cy + dy;
 				if (px >= 0 && px < w && py >= 0 && py < h) {
 					int idx = (py * w + px) * 4;
-					snap->compositeRGBA[idx + 0] = 255;
-					snap->compositeRGBA[idx + 1] = 255;
-					snap->compositeRGBA[idx + 2] = 255;
-					snap->compositeRGBA[idx + 3] = 255;
+					snap->backgroundRGBA[idx + 0] = 255;
+					snap->backgroundRGBA[idx + 1] = 255;
+					snap->backgroundRGBA[idx + 2] = 255;
+					snap->backgroundRGBA[idx + 3] = 255;
 				}
 			}
 		}

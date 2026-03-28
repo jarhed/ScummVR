@@ -32,6 +32,11 @@
 #include <cmath>
 #include <cstdio>
 
+// Laser shader globals from android-vr-main.cpp
+extern GLuint g_laserProgram;
+extern GLint g_laserMVPLoc, g_laserColorLoc;
+extern GLuint g_laserVBO;
+
 #define LOG_TAG "ScummVR_Diorama"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -689,28 +694,36 @@ void dioramaRendererDraw(const float *viewProj) {
 
 			// 3D position
 			float wx = -hw + u * DIORAMA_WIDTH;
-			float wz = -DIORAMA_DISTANCE - DIORAMA_DEPTH + actorDepth * DIORAMA_DEPTH * 1.2f + 0.05f; // slightly in front of mesh
+			float wz = -DIORAMA_DISTANCE - DIORAMA_DEPTH + actorDepth * DIORAMA_DEPTH * 1.2f + 0.1f; // in front of mesh
 
-			// Actor height based on scale (bigger scale = taller = closer)
+			// Sample the mesh Y at the actor's position to find the floor height
+			// The mesh vertex Y = DIORAMA_CENTER_Y + (1-v) * dioHeight
+			// At the actor's feet (v = actor.y / screenH), the mesh Y is:
+			float meshV = (float)actor.y / screenH;
+			float meshY = DIORAMA_CENTER_Y + (1.0f - meshV) * dioHeight;
+
+			// Actor height based on scale
 			float actorH = dioHeight * (float)actor.scale / 255.0f * 0.7f;
-			float actorW = actorH * 0.4f; // approximate width
+			float actorW = actorH * 0.4f;
 
-			// Vertical billboard: stands on the floor at the actor's depth
-			// Crop from composite texture: UV region around the actor
-			float cropW = 40.0f / screenW; // ~40 pixels wide crop
-			float cropH = 80.0f / screenH; // ~80 pixels tall crop
+			// Billboard base starts at the mesh floor height (not DIORAMA_CENTER_Y)
+			float baseY = meshY - actorH * 0.1f; // slightly below feet
+
+			// Crop from composite texture
+			float cropW = 50.0f / screenW; // ~50 pixels wide
+			float cropH = 90.0f / screenH; // ~90 pixels tall
 			float cropU = u - cropW / 2.0f;
 			float cropV = (float)actor.y / screenH - cropH; // above the feet
 
 			float verts[] = {
 				// Bottom-left
-				wx - actorW/2, DIORAMA_CENTER_Y,           wz + 0.01f,  cropU, cropV + cropH,
+				wx - actorW/2, baseY,            wz,  cropU, cropV + cropH,
 				// Bottom-right
-				wx + actorW/2, DIORAMA_CENTER_Y,           wz + 0.01f,  cropU + cropW, cropV + cropH,
+				wx + actorW/2, baseY,            wz,  cropU + cropW, cropV + cropH,
 				// Top-left
-				wx - actorW/2, DIORAMA_CENTER_Y + actorH,  wz + 0.01f,  cropU, cropV,
+				wx - actorW/2, baseY + actorH,   wz,  cropU, cropV,
 				// Top-right
-				wx + actorW/2, DIORAMA_CENTER_Y + actorH,  wz + 0.01f,  cropU + cropW, cropV,
+				wx + actorW/2, baseY + actorH,   wz,  cropU + cropW, cropV,
 			};
 
 			GLuint tmpVBO;
@@ -759,6 +772,9 @@ void dioramaRendererDraw(const float *viewProj) {
 			glUseProgram(0);
 		}
 	}
+
+	// Reticle is drawn into the background texture (in diorama-extractor.cpp)
+	// so it moves with the depth mesh and is always correctly positioned.
 
 	// === Verb/inventory panel ===
 	// Render below the diorama, at the front so it's not occluded by depth mesh

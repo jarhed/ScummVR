@@ -588,6 +588,20 @@ static void processInput(VRApp *a) {
 					g_dioramaCursorX = (int)(u * 320);
 					g_dioramaCursorY = (int)(v * 200);
 
+					// Reticle position: use same formula as depth mesh vertices
+					// so it aligns with the tilted geometry after dioVP transform
+					g_reticleActive = true;
+					if (g_dioramaState && g_dioramaState->getReadBuffer()->valid) {
+						const DioramaSnapshot *rs = g_dioramaState->getReadBuffer();
+						float aspect2 = (float)rs->screenWidth / (float)rs->screenHeight;
+						float dioH2 = DIORAMA_WIDTH / aspect2;
+						// u,v are the mouse UV (already computed above)
+						// Mesh vertex: x = -hw + u*W, y = CENTER + (1-v)*H
+						g_reticleX = -hw + u * DIORAMA_WIDTH;
+						g_reticleY = DIORAMA_CENTER_Y + (1.0f - v) * dioH2;
+						g_reticleZ = screenZ + 0.02f;
+					}
+
 					// Push mouse move event to ScummVM
 					if (g_system) {
 						OSystem_Android *sys = dynamic_cast<OSystem_Android *>(g_system);
@@ -719,10 +733,10 @@ static const char *kLaserFrag =
 	"out vec4 color;\n"
 	"void main() { color = uColor; }\n";
 
-static GLuint g_laserProgram = 0;
-static GLint g_laserMVPLoc = -1;
-static GLint g_laserColorLoc = -1;
-static GLuint g_laserVBO = 0;
+GLuint g_laserProgram = 0;
+GLint g_laserMVPLoc = -1;
+GLint g_laserColorLoc = -1;
+GLuint g_laserVBO = 0;
 
 static void initLaser() {
 	GLuint vs = compileShader(GL_VERTEX_SHADER, kLaserVert);
@@ -903,6 +917,8 @@ int g_dioramaCursorX = 0;
 int g_dioramaCursorY = 0;
 float g_dioramaRotX = 0;
 float g_dioramaRotY = 0;
+float g_reticleX = 0, g_reticleY = 0, g_reticleZ = 0;
+bool g_reticleActive = false;
 
 // Diorama shared state — written by ScummVM thread, read by VR thread
 // (Diorama globals are earlier in the file, before renderFrame)

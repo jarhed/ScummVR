@@ -145,6 +145,10 @@ extern int g_dioramaCursorY;
 extern float g_dioramaRotX;
 extern float g_dioramaRotY;
 
+// 3D reticle position (set by VR input, read by renderer)
+extern float g_reticleX, g_reticleY, g_reticleZ;
+extern bool g_reticleActive;
+
 // Global shared state pointer (set by android_main, read by graphics manager)
 extern DioramaSharedState *g_dioramaState;
 
