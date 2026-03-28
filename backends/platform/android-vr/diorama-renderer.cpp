@@ -94,6 +94,7 @@ struct DioramaRenderer {
 
 	uint8_t lastRoom;
 	uint32_t lastFrame;
+	int16_t lastCameraX;
 	bool initialized;
 };
 
@@ -285,15 +286,34 @@ static void loadDepthMap(const char *path) {
 	float dioH = DIORAMA_WIDTH / aspect;
 	float maxDisplace = DIORAMA_DEPTH * 1.2f; // strong forward displacement for dramatic 3D
 
+	// Camera scroll offset — the depth map covers the full room width,
+	// but the background texture only shows the visible viewport.
+	// We need to sample the depth map at the camera-scrolled position.
+	float scrollU = 0.0f;
+	float viewportFrac = 1.0f; // what fraction of the full room is visible
+	if (g_dioramaState) {
+		const DioramaSnapshot *s = g_dioramaState->getReadBuffer();
+		if (s->valid && s->roomWidth > s->screenWidth) {
+			scrollU = (float)s->cameraX / (float)s->roomWidth;
+			viewportFrac = (float)s->screenWidth / (float)s->roomWidth;
+			// Adjust scroll — cameraX is the center of the viewport
+			scrollU = ((float)s->cameraX - s->screenWidth / 2.0f) / (float)s->roomWidth;
+			if (scrollU < 0) scrollU = 0;
+		}
+	}
+
 	int vi = 0;
 	for (int y = 0; y <= gh; y++) {
 		for (int x = 0; x <= gw; x++) {
-			float u = (float)x / (float)gw;
+			float u = (float)x / (float)gw; // 0-1 across the viewport
 			float v = (float)y / (float)gh;
 
-			// Sample depth map
-			int dx = (int)(u * (dw - 1));
+			// Sample depth map at the scrolled position
+			// Map viewport u (0-1) to full room depth map coordinate
+			float depthU = scrollU + u * viewportFrac;
+			int dx = (int)(depthU * (dw - 1));
 			int dy = (int)(v * (dh - 1));
+			if (dx < 0) dx = 0;
 			if (dx >= dw) dx = dw - 1;
 			if (dy >= dh) dy = dh - 1;
 			float depth = (float)g_diorama.depthData[dy * dw + dx] / 255.0f;
@@ -449,8 +469,74 @@ void dioramaRendererDraw(const float *viewProj) {
 				snap->zplaneRGBA[z]);
 		}
 
+		// Rebuild depth mesh when camera scrolls (depth map stays loaded, just rebuild mesh)
+		if (g_diorama.hasDepthMap && snap->cameraX != g_diorama.lastCameraX) {
+			g_diorama.lastCameraX = snap->cameraX;
+			// Rebuild mesh with same depth data but new camera offset
+			// Reuse loadDepthMap's mesh building by calling it with a dummy rebuild
+			uint16_t dw = g_diorama.depthW, dh = g_diorama.depthH;
+			if (dw > 0 && dh > 0) {
+				// Re-run mesh generation (the scroll offset is read from g_dioramaState inside)
+				int gw = DEPTH_GRID_W, gh = DEPTH_GRID_H;
+				int numVerts = (gw + 1) * (gh + 1);
+				int numIndices = gw * gh * 6;
+				float *verts = new float[numVerts * 5];
+				uint16_t *indices = new uint16_t[numIndices];
+
+				float hw2 = DIORAMA_WIDTH / 2.0f;
+				float aspect2 = (float)dw / (float)dh;
+				float dioH2 = DIORAMA_WIDTH / aspect2;
+				float maxDisp = DIORAMA_DEPTH * 1.2f;
+
+				float scrollU2 = 0, vpFrac2 = 1;
+				if (snap->roomWidth > snap->screenWidth) {
+					scrollU2 = ((float)snap->cameraX - snap->screenWidth / 2.0f) / (float)snap->roomWidth;
+					if (scrollU2 < 0) scrollU2 = 0;
+					vpFrac2 = (float)snap->screenWidth / (float)snap->roomWidth;
+				}
+
+				int vi2 = 0;
+				for (int y = 0; y <= gh; y++) {
+					for (int x = 0; x <= gw; x++) {
+						float u = (float)x / (float)gw;
+						float v = (float)y / (float)gh;
+						float dU = scrollU2 + u * vpFrac2;
+						int ddx = (int)(dU * (dw - 1));
+						int ddy = (int)(v * (dh - 1));
+						if (ddx < 0) ddx = 0;
+						if (ddx >= dw) ddx = dw - 1;
+						if (ddy >= dh) ddy = dh - 1;
+						float d = (float)g_diorama.depthData[ddy * dw + ddx] / 255.0f;
+						verts[vi2++] = -hw2 + u * DIORAMA_WIDTH;
+						verts[vi2++] = DIORAMA_CENTER_Y + (1.0f - v) * dioH2;
+						verts[vi2++] = -DIORAMA_DISTANCE - DIORAMA_DEPTH + d * maxDisp;
+						verts[vi2++] = u;
+						verts[vi2++] = v;
+					}
+				}
+				int ii2 = 0;
+				for (int y = 0; y < gh; y++) {
+					for (int x = 0; x < gw; x++) {
+						int tl = y * (gw + 1) + x;
+						indices[ii2++] = tl; indices[ii2++] = tl + gw + 1; indices[ii2++] = tl + 1;
+						indices[ii2++] = tl + 1; indices[ii2++] = tl + gw + 1; indices[ii2++] = tl + gw + 2;
+					}
+				}
+				glBindBuffer(GL_ARRAY_BUFFER, g_diorama.depthMeshVBO);
+				glBufferData(GL_ARRAY_BUFFER, numVerts * 5 * sizeof(float), verts, GL_DYNAMIC_DRAW);
+				glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.depthMeshIBO);
+				glBufferData(GL_ELEMENT_ARRAY_BUFFER, numIndices * sizeof(uint16_t), indices, GL_DYNAMIC_DRAW);
+				glBindBuffer(GL_ARRAY_BUFFER, 0);
+				glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+				g_diorama.depthMeshIndexCount = numIndices;
+				delete[] verts;
+				delete[] indices;
+			}
+		}
+
 		if (snap->currentRoom != g_diorama.lastRoom) {
 			g_diorama.lastRoom = snap->currentRoom;
+			g_diorama.lastCameraX = snap->cameraX;
 			buildFloorGeometry(snap);
 			// Try to load a depth map for this room
 			// Check app data dir first, then sdcard
@@ -478,16 +564,20 @@ void dioramaRendererDraw(const float *viewProj) {
 	float dioHeight = dioWidth / aspect;
 	float hw = dioWidth / 2.0f;
 
-	// Tilt the diorama back ~25 degrees so viewer looks down at it isometrically
+	// Auto-orient: compute viewing angle from head (origin) to diorama center
+	float dcY = DIORAMA_CENTER_Y + dioHeight * 0.5f;
+	float dcZ = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.5f;
+	float distXZ = sqrtf(dcZ * dcZ); // horizontal distance
+	float autoTiltX = atan2f(-dcY, distXZ); // look down at the diorama
+
 	float dioBase[16];
 	mat4_identity(dioBase);
-	// Translate to pivot point (center of diorama)
-	float pivotY = DIORAMA_CENTER_Y + dioHeight * 0.5f;
-	float pivotZ = -DIORAMA_DISTANCE - DIORAMA_DEPTH * 0.5f;
+	float pivotY = dcY;
+	float pivotZ = dcZ;
 	mat4_translate(dioBase, 0, pivotY, pivotZ);
-	// Rotate around X axis (base tilt + user grab)
+	// X tilt: auto + manual grab adjustment
 	{
-		float angleX = 0.44f + g_dioramaRotX; // base ~25deg + user rotation
+		float angleX = autoTiltX + g_dioramaRotX;
 		float c = cosf(angleX), s = sinf(angleX);
 		float rot[16];
 		mat4_identity(rot);
@@ -497,7 +587,7 @@ void dioramaRendererDraw(const float *viewProj) {
 		mat4_multiply(tmp, dioBase, rot);
 		memcpy(dioBase, tmp, 64);
 	}
-	// Rotate around Y axis (user grab horizontal)
+	// Y rotation: manual grab only
 	if (g_dioramaRotY != 0.0f) {
 		float c = cosf(g_dioramaRotY), s = sinf(g_dioramaRotY);
 		float rot[16];
@@ -508,7 +598,6 @@ void dioramaRendererDraw(const float *viewProj) {
 		mat4_multiply(tmp, dioBase, rot);
 		memcpy(dioBase, tmp, 64);
 	}
-	// Translate back
 	mat4_translate(dioBase, 0, -pivotY, -pivotZ);
 
 	float dioVP[16];
