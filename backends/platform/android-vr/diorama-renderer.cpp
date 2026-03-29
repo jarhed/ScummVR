@@ -95,7 +95,14 @@ struct DioramaRenderer {
 	int depthMeshIndexCount;
 	bool hasDepthMap;
 	uint16_t depthW, depthH;
-	uint8_t depthData[800 * 200]; // depth map data (max room size)
+	uint8_t depthData[800 * 200];
+
+	// Full 3D mesh (from TRELLIS)
+	GLuint mesh3dVBO;
+	GLuint mesh3dIBO;
+	GLuint mesh3dTex;
+	int mesh3dIndexCount;
+	bool has3dMesh;
 
 	uint8_t lastRoom;
 	uint32_t lastFrame;
@@ -211,6 +218,11 @@ void dioramaRendererInit() {
 	glGenBuffers(1, &g_diorama.depthMeshIBO);
 	g_diorama.depthMeshIndexCount = 0;
 	g_diorama.hasDepthMap = false;
+	glGenBuffers(1, &g_diorama.mesh3dVBO);
+	glGenBuffers(1, &g_diorama.mesh3dIBO);
+	g_diorama.mesh3dTex = createTexture();
+	g_diorama.mesh3dIndexCount = 0;
+	g_diorama.has3dMesh = false;
 
 	g_diorama.backgroundTex = createTexture();
 	g_diorama.compositeTex = createTexture();
@@ -252,6 +264,71 @@ bool dioramaHasData() {
 	if (!g_dioramaState) return false;
 	const DioramaSnapshot *snap = g_dioramaState->getReadBuffer();
 	return snap->valid && snap->screenWidth > 0 && snap->screenHeight > 0;
+}
+
+// Load full 3D mesh from .mesh file (exported from TRELLIS via Python)
+static void load3dMesh(const char *path) {
+	FILE *f = fopen(path, "rb");
+	if (!f) {
+		g_diorama.has3dMesh = false;
+		return;
+	}
+
+	char magic[4];
+	fread(magic, 4, 1, f);
+	if (memcmp(magic, "MESH", 4) != 0) {
+		LOGE("Bad mesh magic");
+		fclose(f);
+		return;
+	}
+
+	uint32_t numVerts, numFaces;
+	uint16_t texW, texH;
+	fread(&numVerts, 4, 1, f);
+	fread(&numFaces, 4, 1, f);
+	fread(&texW, 2, 1, f);
+	fread(&texH, 2, 1, f);
+
+	LOGI("Loading 3D mesh: %u verts, %u faces, tex %dx%d", numVerts, numFaces, texW, texH);
+
+	// Read vertices (x,y,z,u,v per vertex)
+	float *verts = new float[numVerts * 5];
+	fread(verts, sizeof(float) * 5, numVerts, f);
+
+	// Read faces (3 uint16 per face)
+	uint16_t *faces = new uint16_t[numFaces * 3];
+	fread(faces, sizeof(uint16_t) * 3, numFaces, f);
+
+	// Upload vertex buffer
+	glBindBuffer(GL_ARRAY_BUFFER, g_diorama.mesh3dVBO);
+	glBufferData(GL_ARRAY_BUFFER, numVerts * 5 * sizeof(float), verts, GL_STATIC_DRAW);
+
+	// Upload index buffer
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.mesh3dIBO);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, numFaces * 3 * sizeof(uint16_t), faces, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	// Read and upload texture
+	if (texW > 0 && texH > 0) {
+		uint8_t *texData = new uint8_t[texW * texH * 4];
+		fread(texData, texW * texH * 4, 1, f);
+		glBindTexture(GL_TEXTURE_2D, g_diorama.mesh3dTex);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texW, texH, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		delete[] texData;
+	}
+
+	fclose(f);
+
+	g_diorama.mesh3dIndexCount = numFaces * 3;
+	g_diorama.has3dMesh = true;
+
+	delete[] verts;
+	delete[] faces;
+
+	LOGI("3D mesh loaded: %u verts, %u faces", numVerts, numFaces);
 }
 
 // Load depth map from file and build displacement mesh
@@ -543,8 +620,9 @@ void dioramaRendererDraw(const float *viewProj) {
 			g_diorama.lastRoom = snap->currentRoom;
 			g_diorama.lastCameraX = snap->cameraX;
 			buildFloorGeometry(snap);
+			// 3D mesh loading disabled — depth-displaced diorama preserves the pixel art charm
+
 			// Try to load a depth map for this room
-			// Check app data dir first, then sdcard
 			const char *dirs[] = {
 				"/data/user/0/org.scummvm.scummvm.vr.debug/files",
 				"/sdcard/scummvm_games/dott",
@@ -608,8 +686,41 @@ void dioramaRendererDraw(const float *viewProj) {
 	float dioVP[16];
 	mat4_multiply(dioVP, viewProj, dioBase);
 
-	// === Background: depth-displaced mesh or flat back wall ===
-	if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {
+	// === Background: full 3D mesh, depth-displaced mesh, or flat back wall ===
+	if (g_diorama.has3dMesh && g_diorama.mesh3dIndexCount > 0) {
+		// Render TRELLIS-generated 3D mesh
+		float model[16];
+		mat4_identity(model);
+		// TRELLIS outputs ~1m³ centered at origin. Make it small and far away.
+		float meshScale = 1.5f;
+		mat4_translate(model, 0, DIORAMA_CENTER_Y + 0.4f, -DIORAMA_DISTANCE - 0.5f);
+		mat4_scale(model, meshScale, meshScale, meshScale);
+
+		// Use viewProj directly, not dioVP (skip diorama tilt for 3D mesh)
+		float mvp[16];
+		mat4_multiply(mvp, viewProj, model);
+
+		glDisable(GL_CULL_FACE);
+		glUseProgram(g_diorama.opaqueProgram);
+		glUniformMatrix4fv(g_diorama.opaqueMVPLoc, 1, GL_FALSE, mvp);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, g_diorama.mesh3dTex);
+		glUniform1i(g_diorama.opaqueTexLoc, 0);
+
+		glBindBuffer(GL_ARRAY_BUFFER, g_diorama.mesh3dVBO);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_diorama.mesh3dIBO);
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void *)0);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void *)12);
+		glDrawElements(GL_TRIANGLES, g_diorama.mesh3dIndexCount, GL_UNSIGNED_SHORT, 0);
+		glDisableVertexAttribArray(0);
+		glDisableVertexAttribArray(1);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		glUseProgram(0);
+		glEnable(GL_CULL_FACE);
+	} else if (g_diorama.hasDepthMap && g_diorama.depthMeshIndexCount > 0) {
 		// Render depth-displaced mesh
 		glUseProgram(g_diorama.opaqueProgram);
 		glUniformMatrix4fv(g_diorama.opaqueMVPLoc, 1, GL_FALSE, dioVP);
