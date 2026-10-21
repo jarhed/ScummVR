@@ -84,7 +84,7 @@ struct VRApp {
 	GLuint scummvmFBO;         // FBO ScummVM renders to
 	GLuint scummvmTexture;     // shared texture (written by ScummVM, read by VR)
 	pthread_t scummvmThread;
-	bool scummvmRunning;
+	volatile bool scummvmRunning;
 
 	XrInstance instance;
 	XrSystemId system;
@@ -92,7 +92,7 @@ struct VRApp {
 	XrSpace localSpace;
 	XrSessionState sessionState;
 	bool sessionRunning;
-	bool running;
+	volatile bool running;
 
 	uint32_t viewCount;
 	XrViewConfigurationView viewConfigs[MAX_VIEWS];
@@ -188,7 +188,12 @@ static void mat4_projection(float *m, const XrFovf &fov, float n, float f) {
 static void handleCmd(android_app *app, int32_t cmd) {
 	VRApp *a = (VRApp *)app->userData;
 	if (cmd == APP_CMD_INIT_WINDOW) { a->windowInit = true; LOGI("Window ready"); }
-	else if (cmd == APP_CMD_DESTROY) a->running = false;
+	else if (cmd == APP_CMD_DESTROY) {
+		a->running = false;
+		// The system is tearing the activity down; make sure the ScummVM
+		// thread unwinds too, otherwise pthread_join below would hang.
+		if (g_system) g_system->quit();
+	}
 }
 
 static bool initEGL(VRApp *a) {
@@ -858,6 +863,9 @@ static void *scummvmThreadFunc(void *arg) {
 	LOGI("scummvm_main returned %d", result);
 
 	a->scummvmRunning = false;
+	// ScummVM has exited (e.g. the user picked Quit in the launcher). Take
+	// down the VR main loop as well so the app actually closes on the headset.
+	a->running = false;
 	vm->DetachCurrentThread();
 	return nullptr;
 }
@@ -907,6 +915,10 @@ extern "C" void android_main(android_app *app) {
 	pthread_join(a.scummvmThread, nullptr);
 
 	LOGI("Exiting");
+	// NativeActivity stays alive after android_main returns, which is why
+	// Quit used to leave a dead-but-running app. Finish the activity so the
+	// Quest returns to the system UI.
+	ANativeActivity_finish(a.app->activity);
 }
 
 #endif // USE_OPENXR
