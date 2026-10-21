@@ -1073,9 +1073,16 @@ static void installThemeAssets(JNIEnv *env, jobject assetManagerObj) {
 		// MD5SUMS format: "<32 hex chars>  <path>"
 		if (line.size() < 35) continue;
 		std::string assetPath = line.substr(34);
-		if (assetPath.compare(0, 13, "assets/themes") != 0) continue;
-
-		std::string dest = std::string(kScummVMFilesDir) + "/gui" + assetPath.substr(6);
+		std::string dest;
+		if (assetPath.compare(0, 13, "assets/themes") == 0) {
+			dest = std::string(kScummVMFilesDir) + "/gui" + assetPath.substr(6);
+		} else if (assetPath == "assets/shaders.dat" || assetPath == "assets/gui-icons.dat") {
+			// generateZipSet() finds these packs in the --themepath directory;
+			// shaders.dat drives ScummVM's launcher Shaders tab (crt-pi, hq2x...)
+			dest = themesDir + "/" + assetPath.substr(7);
+		} else {
+			continue;
+		}
 		mkdirParents(dest.c_str());
 
 		AAsset *a = AAssetManager_open(mgr, assetPath.c_str(), AASSET_MODE_BUFFER);
