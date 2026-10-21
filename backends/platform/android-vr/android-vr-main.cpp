@@ -75,6 +75,9 @@ static const char *kScreenFrag =
 	"out vec4 color;\n"
 	"void main() { color = texture(tex, vUV); }\n";
 
+// Floating UI buttons shown around the virtual screen (see initUIButtons)
+enum { kBtnMenu = 0, kBtnCount };
+
 struct VRApp {
 	android_app *app;
 	bool windowInit;
@@ -115,6 +118,24 @@ struct VRApp {
 	GLuint screenVBO;
 	GLint screenMVPLoc;
 	GLint screenTexLoc;
+
+	// Floating UI buttons near the screen edges
+	GLuint uiProgram;
+	GLuint uiVBO;
+	GLuint uiTexIds[kBtnCount];
+	GLint uiMVPLoc;
+	GLint uiTexLoc;
+	GLint uiTintLoc;
+	int uiHover;
+	bool uiClickAbsorbed;
+
+	// VR-space pointer dot: where the controller ray meets the screen plane,
+	// visible even outside the game video (ScummVM's own cursor is only drawn
+	// inside the screen rect)
+	GLuint uiCursorVBO;
+	GLuint uiCursorTex;
+	float rayHitX, rayHitY;
+	bool rayHitValid;
 	GLuint testTexture;
 
 	// Controller input
@@ -453,6 +474,231 @@ static void drawScreen(VRApp *a, const float *viewProj) {
 	glUseProgram(0);
 }
 
+// ---- Floating UI buttons ----
+// Textured quads on the same plane as the virtual screen (z = -2.5), anchored
+// above its top edge so they float above the ScummVM display. Sharing the
+// screen plane lets the controller ray intersection double as a hit test.
+static const char *kUIButtonFrag =
+	"#version 300 es\n"
+	"precision mediump float;\n"
+	"in vec2 vUV;\n"
+	"uniform sampler2D tex;\n"
+	"uniform vec4 tint;\n"
+	"out vec4 color;\n"
+	"void main() { color = texture(tex, vUV) * tint; }\n";
+
+struct UIButtonDesc { float cx, cy, hw, hh; };
+
+// Screen is 3.2 x 1.8 m at z=-2.5 (top edge y=+0.9, left edge x=-1.6).
+// The menu button sits above the top-left corner with a small gap.
+static const UIButtonDesc kBtnDesc[kBtnCount] = {
+	{ -1.36f, 1.06f, 0.20f, 0.11f },   // menu (hamburger)
+};
+
+// Procedural icon texture: dark rounded panel, orange border, hamburger glyph
+// (three bars). No text rendering exists in the VR backend, so glyphs are drawn
+// straight into the pixel buffer.
+static GLuint makeMenuIconTexture() {
+	const int W = 256, H = 144;
+	static uint8_t px[W * H * 4];
+	const float r = 26.0f; // rounded corner radius
+
+	for (int y = 0; y < H; y++) {
+		for (int x = 0; x < W; x++) {
+			uint8_t *p = &px[(y * W + x) * 4];
+			float fx = (float)x, fy = (float)y;
+
+			// Rounded-rect signed distance
+			float dx = fabsf(fx - W / 2.0f) - (W / 2.0f - r);
+			float dy = fabsf(fy - H / 2.0f) - (H / 2.0f - r);
+			float d = sqrtf(fmaxf(dx, 0.f) * fmaxf(dx, 0.f) +
+			                fmaxf(dy, 0.f) * fmaxf(dy, 0.f)) +
+			          fminf(fmaxf(dx, dy), 0.f);
+			if (d > 0.f) { p[0] = p[1] = p[2] = p[3] = 0; continue; }
+
+			uint8_t R, G, B;
+			if (d > -4.0f) { R = 255; G = 150; B = 60; }   // orange border ring
+			else           { R = 38;  G = 38;  B = 48;  }  // dark panel
+
+			// Hamburger glyph: three horizontal bars centered
+			bool bar = fabsf(fx - W / 2.0f) < 46.0f &&
+			           (fabsf(fy - H / 2.0f) < 7.0f ||
+			            fabsf(fy - (H / 2.0f - 24.0f)) < 7.0f ||
+			            fabsf(fy - (H / 2.0f + 24.0f)) < 7.0f);
+			if (bar) { R = 245; G = 245; B = 240; }
+
+			p[0] = R; p[1] = G; p[2] = B; p[3] = 240;
+		}
+	}
+
+	GLuint tex;
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	return tex;
+}
+
+// Procedural pointer dot: white circle with soft edge and a thin dark ring
+// so it stays visible against both the game video and the black void.
+static GLuint makeCursorTexture() {
+	const int W = 64, H = 64;
+	static uint8_t px[W * H * 4];
+	const float cx = W / 2.0f, cy = H / 2.0f;
+
+	for (int y = 0; y < H; y++) {
+		for (int x = 0; x < W; x++) {
+			uint8_t *p = &px[(y * W + x) * 4];
+			float d = sqrtf((x - cx) * (x - cx) + (y - cy) * (y - cy));
+			if (d < 9.0f) {
+				p[0] = 255; p[1] = 255; p[2] = 255; p[3] = 255;          // white core
+			} else if (d < 11.0f) {
+				float a = (13.0f - d) / 2.0f;
+				p[0] = 255; p[1] = 255; p[2] = 255; p[3] = (uint8_t)(a * 255); // soft edge
+			} else if (d < 13.5f) {
+				p[0] = 20; p[1] = 20; p[2] = 25; p[3] = 140;             // dark outline ring
+			} else {
+				p[0] = p[1] = p[2] = p[3] = 0;
+			}
+		}
+	}
+
+	GLuint tex;
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	return tex;
+}
+
+static void initUIButtons(VRApp *a) {
+	GLuint vs = compileShader(GL_VERTEX_SHADER, kScreenVert);
+	GLuint fs = compileShader(GL_FRAGMENT_SHADER, kUIButtonFrag);
+	a->uiProgram = glCreateProgram();
+	glAttachShader(a->uiProgram, vs);
+	glAttachShader(a->uiProgram, fs);
+	glLinkProgram(a->uiProgram);
+	glDeleteShader(vs); glDeleteShader(fs);
+	a->uiMVPLoc  = glGetUniformLocation(a->uiProgram, "mvp");
+	a->uiTexLoc  = glGetUniformLocation(a->uiProgram, "tex");
+	a->uiTintLoc = glGetUniformLocation(a->uiProgram, "tint");
+
+	a->uiTexIds[kBtnMenu] = makeMenuIconTexture();
+
+	// Static VBO: one triangle-strip quad per button (pos3 + uv2, like the screen quad)
+	float verts[kBtnCount][4][5];
+	for (int b = 0; b < kBtnCount; b++) {
+		const UIButtonDesc &d = kBtnDesc[b];
+		float x0 = d.cx - d.hw, x1 = d.cx + d.hw;
+		float y0 = d.cy - d.hh, y1 = d.cy + d.hh;
+		verts[b][0][0] = x0; verts[b][0][1] = y0; verts[b][0][2] = -2.5f; verts[b][0][3] = 0; verts[b][0][4] = 0;
+		verts[b][1][0] = x1; verts[b][1][1] = y0; verts[b][1][2] = -2.5f; verts[b][1][3] = 1; verts[b][1][4] = 0;
+		verts[b][2][0] = x0; verts[b][2][1] = y1; verts[b][2][2] = -2.5f; verts[b][2][3] = 0; verts[b][2][4] = 1;
+		verts[b][3][0] = x1; verts[b][3][1] = y1; verts[b][3][2] = -2.5f; verts[b][3][3] = 1; verts[b][3][4] = 1;
+	}
+	glGenBuffers(1, &a->uiVBO);
+	glBindBuffer(GL_ARRAY_BUFFER, a->uiVBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+
+	// Cursor dot: texture + dynamic VBO (quad rebuilt every frame at the ray hit)
+	a->uiCursorTex = makeCursorTexture();
+	glGenBuffers(1, &a->uiCursorVBO);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	a->uiHover = -1;
+	a->uiClickAbsorbed = false;
+	a->rayHitValid = false;
+	a->rayHitX = a->rayHitY = 0;
+	LOGI("Floating UI buttons initialized");
+}
+
+static void drawUIButtons(VRApp *a, const float *viewProj) {
+	glUseProgram(a->uiProgram);
+	glUniformMatrix4fv(a->uiMVPLoc, 1, GL_FALSE, viewProj);
+	glUniform1i(a->uiTexLoc, 0);
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDepthFunc(GL_LEQUAL); // coplanar with the screen quad drawn earlier
+
+	glBindBuffer(GL_ARRAY_BUFFER, a->uiVBO);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void*)0);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void*)12);
+
+	for (int b = 0; b < kBtnCount; b++) {
+		float tint[4] = {1, 1, 1, 1};
+		if (a->uiHover == b)
+			tint[0] = tint[1] = tint[2] = 1.5f; // hover highlight
+		glUniform4fv(a->uiTintLoc, 1, tint);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, a->uiTexIds[b]);
+		glDrawArrays(GL_TRIANGLE_STRIP, b * 4, 4);
+	}
+
+	// VR-space pointer dot where the controller ray meets this plane; visible
+	// anywhere on the plane, including outside the game video rect
+	if (a->rayHitValid) {
+		const float cs = 0.045f; // quad half-size (dot itself is ~40% of it)
+		float cverts[4][5] = {
+			{ a->rayHitX - cs, a->rayHitY - cs, -2.5f, 0, 0 },
+			{ a->rayHitX + cs, a->rayHitY - cs, -2.5f, 1, 0 },
+			{ a->rayHitX - cs, a->rayHitY + cs, -2.5f, 0, 1 },
+			{ a->rayHitX + cs, a->rayHitY + cs, -2.5f, 1, 1 },
+		};
+		float ctint[4] = {1, 1, 1, 1};
+		if (a->uiHover >= 0) {
+			ctint[0] = 1.0f; ctint[1] = 0.55f; ctint[2] = 0.2f; // orange over a button
+		}
+		glUniform4fv(a->uiTintLoc, 1, ctint);
+		glBindBuffer(GL_ARRAY_BUFFER, a->uiCursorVBO);
+		glBufferData(GL_ARRAY_BUFFER, sizeof(cverts), cverts, GL_DYNAMIC_DRAW);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 20, (void*)0);
+		glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, (void*)12);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, a->uiCursorTex);
+		glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
+	glDisableVertexAttribArray(0);
+	glDisableVertexAttribArray(1);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glDepthFunc(GL_LESS);
+	glDisable(GL_BLEND);
+	glUseProgram(0);
+}
+
+// Which floating button (if any) the ray-plane hit point falls inside
+static int uiButtonAt(float hitX, float hitY) {
+	for (int b = 0; b < kBtnCount; b++) {
+		const UIButtonDesc &d = kBtnDesc[b];
+		if (hitX >= d.cx - d.hw && hitX <= d.cx + d.hw &&
+		    hitY >= d.cy - d.hh && hitY <= d.cy + d.hh)
+			return b;
+	}
+	return -1;
+}
+
+static void fireUIButton(VRApp *a, OSystem_Android *sys, int button) {
+	if (!sys) return;
+	if (button == kBtnMenu) {
+		// Global ScummVM menu, same as the Touch Menu button / desktop Ctrl+F1
+		Common::Event ev;
+		ev.type = Common::EVENT_MAINMENU;
+		sys->pushEvent(ev);
+	}
+}
+
 // ---- Event loop and rendering ----
 static void pumpEvents(VRApp *a) {
 	int events;
@@ -533,21 +779,32 @@ static void processInput(VRApp *a) {
 	float qx = pose.orientation.x, qy = pose.orientation.y;
 	float qz = pose.orientation.z, qw = pose.orientation.w;
 	// Forward direction: rotate (0,0,-1) by quaternion (x,y,z,w)
-	float dirX = -2.0f * (qx * qz - qw * qy);
-	float dirY = -2.0f * (qy * qz + qw * qx);
+	float dirX = -2.0f * (qx * qz + qw * qy);
+	float dirY = -2.0f * (qy * qz - qw * qx);
 	float dirZ = -(1.0f - 2.0f * (qx * qx + qy * qy));
 
 	float screenZ = -2.5f;
+	int hover = -1;
+	bool planeHit = false;
 	if (fabsf(dirZ) > 1e-6f) {
 		float t = (screenZ - pose.position.z) / dirZ;
 		if (t > 0) {
 			float hitX = pose.position.x + t * dirX;
 			float hitY = pose.position.y + t * dirY;
+			planeHit = true;
+			a->rayHitX = hitX;
+			a->rayHitY = hitY;
+
+			// Floating buttons live on this same plane, outside the screen rect
+			hover = uiButtonAt(hitX, hitY);
 
 			float hw = 1.6f, hh = 0.9f;
-			if (hitX >= -hw && hitX <= hw && hitY >= -hh && hitY <= hh) {
-				float u = 1.0f - (hitX + hw) / (2 * hw); // mirror X
-				float v = (hitY + hh) / (2 * hh);         // mirror Y
+			if (hover < 0 && hitX >= -hw && hitX <= hw && hitY >= -hh && hitY <= hh) {
+				// Direct mapping from the plane hit to game pixels, matching
+				// the screen quad's UV layout (v=0 is at the world top edge).
+				// Used to compensate a mirrored controller ray; see dirX fix.
+				float u = (hitX + hw) / (2 * hw);
+				float v = (hh - hitY) / (2 * hh);
 				int mx = (int)(u * 1920);
 				int my = (int)(v * 1080);
 
@@ -570,6 +827,9 @@ static void processInput(VRApp *a) {
 			}
 		}
 	}
+	a->uiHover = hover;
+	// Keep the dot tidy: don't draw it when the ray grazes toward the horizon
+	a->rayHitValid = planeHit && fabsf(a->rayHitX) < 5.0f && fabsf(a->rayHitY) < 3.5f;
 
 	// Right trigger → left click (edge detection at 0.5 threshold)
 	if (g_system) {
@@ -577,14 +837,20 @@ static void processInput(VRApp *a) {
 		if (sys && a->mouseValid) {
 			const float THRESH = 0.5f;
 
-			// Trigger → left click
+			// Trigger → left click (absorbed when a floating button is hovered)
 			if (a->prevTriggerValues[1] < THRESH && a->triggerValues[1] >= THRESH) {
-				Common::Event ev;
-				ev.type = Common::EVENT_LBUTTONDOWN;
-				ev.mouse = Common::Point(a->mouseX, a->mouseY);
-				sys->pushEvent(ev);
+				if (a->uiHover >= 0) {
+					fireUIButton(a, sys, a->uiHover);
+					a->uiClickAbsorbed = true;
+				} else {
+					Common::Event ev;
+					ev.type = Common::EVENT_LBUTTONDOWN;
+					ev.mouse = Common::Point(a->mouseX, a->mouseY);
+					sys->pushEvent(ev);
+					a->uiClickAbsorbed = false;
+				}
 			}
-			if (a->prevTriggerValues[1] >= THRESH && a->triggerValues[1] < THRESH) {
+			if (a->prevTriggerValues[1] >= THRESH && a->triggerValues[1] < THRESH && !a->uiClickAbsorbed) {
 				Common::Event ev;
 				ev.type = Common::EVENT_LBUTTONUP;
 				ev.mouse = Common::Point(a->mouseX, a->mouseY);
@@ -720,6 +986,9 @@ static void renderFrame(VRApp *a) {
 
 			// Draw the virtual screen
 			drawScreen(a, vpMat);
+
+			// Floating buttons above the screen edges
+			drawUIButtons(a, vpMat);
 
 			XrSwapchainImageReleaseInfo ri = {XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
 			xrReleaseSwapchainImage(a->swapchains[v], &ri);
@@ -1004,6 +1273,7 @@ extern "C" void android_main(android_app *app) {
 
 	initSharedTexture(&a);
 	initScreenQuad(&a);
+	initUIButtons(&a);
 
 	// Start ScummVM on a background thread
 	pthread_create(&a.scummvmThread, nullptr, scummvmThreadFunc, &a);
