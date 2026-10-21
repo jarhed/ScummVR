@@ -101,6 +101,7 @@ ScummVM knows how to read the data files from both the original and remastered e
 | **Right trigger** | Left click |
 | **Right grip** | Right click |
 | **B button** | ESC (skip cutscene, open menu) |
+| **Left Touch Menu button** | Open the global ScummVM menu (like Ctrl+F1 on desktop) |
 | **Left thumbstick** | Scroll up/down |
 | **Head movement** | Look around |
 
@@ -109,7 +110,6 @@ ScummVM knows how to read the data files from both the original and remastered e
 - Only SCUMM engine games (LucasArts adventures) are included in this build — Monkey Island, Day of the Tentacle, Indiana Jones, Sam & Max, Full Throttle, The Dig, etc.
 - Only tested on Quest 2
 - No hand tracking yet (controllers only)
-- Theme files not loaded (the UI looks basic but works fine)
 
 ## Building from source
 

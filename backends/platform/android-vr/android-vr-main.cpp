@@ -132,6 +132,8 @@ struct VRApp {
 	XrPosef handPoses[2];
 	bool bButtonPressed;
 	bool prevBButtonPressed;
+	bool menuPressed;
+	bool prevMenuPressed;
 	float triggerValues[2];
 	float prevTriggerValues[2];
 	float gripValues[2];
@@ -642,6 +644,25 @@ static void processInput(VRApp *a) {
 			evUp.kbd.ascii = 27;
 			evUp.kbd.flags = 0;
 			sys->pushEvent(evUp);
+		}
+	}
+
+	// Menu button (left Touch) → open the global ScummVM menu, the VR
+	// equivalent of Ctrl+F1 (which SDL turns into EVENT_MAINMENU on desktop).
+	// The menu action was already created/bound but never polled until now.
+	a->prevMenuPressed = a->menuPressed;
+	XrActionStateGetInfo mgi = {XR_TYPE_ACTION_STATE_GET_INFO};
+	mgi.action = a->menuAction;
+	XrActionStateBoolean mbs = {XR_TYPE_ACTION_STATE_BOOLEAN};
+	if (XR_SUCCEEDED(xrGetActionStateBoolean(a->session, &mgi, &mbs)) && mbs.isActive)
+		a->menuPressed = mbs.currentState;
+
+	if (a->menuPressed && !a->prevMenuPressed && g_system) {
+		OSystem_Android *sys = dynamic_cast<OSystem_Android *>(g_system);
+		if (sys) {
+			Common::Event ev;
+			ev.type = Common::EVENT_MAINMENU;
+			sys->pushEvent(ev);
 		}
 	}
 }
