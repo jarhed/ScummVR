@@ -2225,7 +2225,11 @@ Common::String ThemeEngine::getThemeId(const Common::Path &filename) {
 		} else {
 			// unpacked theme we need to update the name with -unpacked
 			Common::String id = node.getName();
-			id.chop(1);
+			// Upstream assumed a trailing separator here and chopped blindly,
+			// which ate the last real character (scummmodern -> scummmoder)
+			// and made the id unmatchable against listUsableThemes().
+			if (id.lastChar() == '/' || id.lastChar() == '\\')
+				id.deleteLastChar();
 			id += "-unpacked";
 			return id;
 		}
