@@ -41,6 +41,7 @@
 
 // From android-vr-main.cpp — shared texture ID for VR rendering
 extern uint32_t g_vrSharedTexture;
+extern volatile bool g_scummvmReady;
 
 #define LOG_TAG "ScummVM_VR"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -183,6 +184,10 @@ void AndroidVRGraphicsManager::initSurface() {
 
 	LOGI("VR surface initialized: %dx%d, shared texture %u",
 		JNI::egl_surface_width, JNI::egl_surface_height, _sceneTexture);
+
+	// OSystem_Android::init() has long completed by this point, so the event
+	// queue is safe to push to from the VR main thread.
+	g_scummvmReady = true;
 }
 
 void AndroidVRGraphicsManager::resizeSurface() {

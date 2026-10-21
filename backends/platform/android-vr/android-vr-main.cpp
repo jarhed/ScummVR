@@ -55,6 +55,12 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+// Set by AndroidVRGraphicsManager::initSurface once ScummVM's OSystem is
+// fully initialized — that happens after OSystem_Android::init() allocated
+// the event queue lock. processInput must not push events before this, or
+// it dereferences the null _event_queue_lock (SIGSEGV at startup).
+volatile bool g_scummvmReady = false;
+
 #define MAX_VIEWS 4
 #define MAX_SWAPCHAIN_LENGTH 4
 
@@ -814,7 +820,7 @@ static void processInput(VRApp *a) {
 					a->mouseValid = true;
 
 					// Push mouse move event to ScummVM
-					if (g_system) {
+					if (g_system && g_scummvmReady) {
 						OSystem_Android *sys = dynamic_cast<OSystem_Android *>(g_system);
 						if (sys) {
 							Common::Event ev;
@@ -832,7 +838,7 @@ static void processInput(VRApp *a) {
 	a->rayHitValid = planeHit && fabsf(a->rayHitX) < 5.0f && fabsf(a->rayHitY) < 3.5f;
 
 	// Right trigger → left click (edge detection at 0.5 threshold)
-	if (g_system) {
+	if (g_system && g_scummvmReady) {
 		OSystem_Android *sys = dynamic_cast<OSystem_Android *>(g_system);
 		if (sys && a->mouseValid) {
 			const float THRESH = 0.5f;
@@ -894,7 +900,7 @@ static void processInput(VRApp *a) {
 	if (XR_SUCCEEDED(xrGetActionStateBoolean(a->session, &bgi, &bbs)) && bbs.isActive)
 		a->bButtonPressed = bbs.currentState;
 
-	if (a->bButtonPressed && !a->prevBButtonPressed && g_system) {
+	if (a->bButtonPressed && !a->prevBButtonPressed && g_system && g_scummvmReady) {
 		OSystem_Android *sys = dynamic_cast<OSystem_Android *>(g_system);
 		if (sys) {
 			Common::Event ev;
@@ -923,7 +929,7 @@ static void processInput(VRApp *a) {
 	if (XR_SUCCEEDED(xrGetActionStateBoolean(a->session, &mgi, &mbs)) && mbs.isActive)
 		a->menuPressed = mbs.currentState;
 
-	if (a->menuPressed && !a->prevMenuPressed && g_system) {
+	if (a->menuPressed && !a->prevMenuPressed && g_system && g_scummvmReady) {
 		OSystem_Android *sys = dynamic_cast<OSystem_Android *>(g_system);
 		if (sys) {
 			Common::Event ev;
@@ -1239,6 +1245,8 @@ static void *scummvmThreadFunc(void *arg) {
 	int argc = 3;
 
 	int result = scummvm_main(argc, argv);
+	// ScummVM is tearing down its OSystem; stop pushing events immediately
+	g_scummvmReady = false;
 
 	LOGI("scummvm_main returned %d", result);
 
