@@ -694,7 +694,8 @@ bool ThemeEngine::addBitmap(const Common::String &filename, const Common::String
 			surf->convertFrom(*srcSurface, _overlayFormat);
 		}
 #else
-		error("No PNG support compiled in");
+		// Not fatal: the caller deals with a missing texture.
+		warning("No PNG support compiled in, cannot load '%s'", filename.c_str());
 #endif
 	} else {
 		// If not, try to load the bitmap via the BitmapDecoder class.
