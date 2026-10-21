@@ -13,6 +13,12 @@
 	<uses-permission
 		android:name="android.permission.WRITE_EXTERNAL_STORAGE"
 		tools:ignore="ScopedStorage" />
+	<!-- All-files access: lets the native (POSIX) file browser see /sdcard on
+	     Quest, where requestLegacyExternalStorage is ignored for targetSdk 32.
+	     Grant once via: adb shell appops set <pkg> MANAGE_EXTERNAL_STORAGE allow -->
+	<uses-permission
+		android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+		tools:ignore="ScopedStorage" />
 
 	<!-- VR hardware requirements -->
 	<uses-feature

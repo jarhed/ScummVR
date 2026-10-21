@@ -41,6 +41,7 @@
 
 // From android-vr-main.cpp — shared texture ID for VR rendering
 extern uint32_t g_vrSharedTexture;
+extern volatile bool g_scummvmReady;
 
 #define LOG_TAG "ScummVM_VR"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -127,7 +128,10 @@ AndroidVRGraphicsManager::~AndroidVRGraphicsManager() {
 	if (_sceneFBO) {
 		glDeleteFramebuffers(1, &_sceneFBO);
 	}
-	if (_sceneTexture) {
+	// _sceneTexture is normally the VR thread's shared texture (adopted in
+	// initSurface, owned by android_main). Deleting it here would kill the
+	// VR display; only delete textures we created ourselves.
+	if (_sceneTexture && _sceneTexture != g_vrSharedTexture) {
 		glDeleteTextures(1, &_sceneTexture);
 	}
 	if (_sceneDepthBuffer) {
@@ -183,6 +187,10 @@ void AndroidVRGraphicsManager::initSurface() {
 
 	LOGI("VR surface initialized: %dx%d, shared texture %u",
 		JNI::egl_surface_width, JNI::egl_surface_height, _sceneTexture);
+
+	// OSystem_Android::init() has long completed by this point, so the event
+	// queue is safe to push to from the VR main thread.
+	g_scummvmReady = true;
 }
 
 void AndroidVRGraphicsManager::resizeSurface() {
@@ -198,7 +206,10 @@ void AndroidVRGraphicsManager::deinitSurface() {
 	destroyVRShaders();
 
 	if (_sceneFBO) { glDeleteFramebuffers(1, &_sceneFBO); _sceneFBO = 0; }
-	if (_sceneTexture) { glDeleteTextures(1, &_sceneTexture); _sceneTexture = 0; }
+	if (_sceneTexture && _sceneTexture != g_vrSharedTexture) {
+		glDeleteTextures(1, &_sceneTexture);
+	}
+	_sceneTexture = 0;
 	if (_sceneDepthBuffer) { glDeleteRenderbuffers(1, &_sceneDepthBuffer); _sceneDepthBuffer = 0; }
 
 	notifyContextDestroy();

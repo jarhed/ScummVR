@@ -174,7 +174,16 @@ int ListWidget::findDataIndex(int dataIndex) const {
 }
 
 void ListWidget::setSelected(int item) {
-	if (item < -1 || item >= (int)_list.size())
+	if (item == -1) {
+		// Clear selection (matches upstream; the old code below read _listIndex,
+		// which is empty unless the list is sorted -> out-of-bounds assert)
+		clearSelection();
+		_selectedItem = -1;
+		markAsDirty();
+		return;
+	}
+
+	if (item < 0 || item >= (int)_list.size())
 		return;
 
 	// We only have to do something if the widget is enabled and the selection actually changes

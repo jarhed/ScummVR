@@ -431,7 +431,8 @@ Graphics::ManagedSurface *loadSurfaceFromFile(const Common::String &name, int re
 		}
 		g_gui.unlockIconsSet();
 #else
-		error("No PNG support compiled");
+		// Not fatal: callers handle a missing icon gracefully.
+		warning("No PNG support compiled, cannot load '%s'", name.c_str());
 #endif
 	} else if (name.hasSuffix(".svg")) {
 		g_gui.lockIconsSet();
