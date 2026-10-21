@@ -30,6 +30,11 @@
 #include <android/log.h>
 #include <android/native_activity.h>
 #include <android_native_app_glue.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
+#include <sys/stat.h>
+#include <cstdio>
+#include <string>
 #include <cstring>
 #include <cmath>
 #include <pthread.h>
@@ -43,6 +48,7 @@
 // ScummVM headers for event pushing
 #include "common/system.h"
 #include "common/events.h"
+#include "common/config-manager.h"
 #include "backends/platform/android/android.h"
 
 #define LOG_TAG "ScummVM_VR_Main"
@@ -727,6 +733,78 @@ extern "C" int scummvm_main(int argc, const char * const argv[]);
 
 #include "backends/platform/android/jni-android.h"
 
+// The files dir of the debug VR package (used for the config file and the
+// unpacked GUI themes). Matches the package/applicationId in our Gradle setup.
+static const char *kScummVMFilesDir = "/data/user/0/org.scummvm.scummvm.vr.debug/files";
+
+// The VR app is started through NativeActivity, so the Java-side asset copy
+// (updateAssetsToInternalMemory) never runs and the launcher falls back to the
+// builtin green/black theme. Copy the unpacked theme directories over from the
+// APK assets and point ThemeEngine at them. They must be unpacked directories
+// (not zips) because scummmodern's THEMERC pulls in ../common via %using.
+//
+// We enumerate via the MD5SUMS manifest staged by android.mk (its paths are
+// identical to the runtime asset paths); AAssetManager's own directory listing
+// is unreliable for folders that have no zip directory entries.
+static std::string themesDirPath() {
+	return std::string(kScummVMFilesDir) + "/gui/themes";
+}
+
+static void mkdirParents(const char *path) {
+	for (const char *p = path + 1; *p; p++) {
+		if (*p == '/') {
+			std::string part(path, p - path);
+			mkdir(part.c_str(), 0755);
+		}
+	}
+}
+
+static void installThemeAssets(JNIEnv *env, jobject assetManagerObj) {
+	AAssetManager *mgr = AAssetManager_fromJava(env, assetManagerObj);
+	if (!mgr) { LOGE("AAssetManager_fromJava failed"); return; }
+
+	AAsset *sums = AAssetManager_open(mgr, "MD5SUMS", AASSET_MODE_BUFFER);
+	if (!sums) { LOGE("MD5SUMS asset missing - cannot install themes"); return; }
+
+	std::string themesDir = themesDirPath();
+	mkdir(kScummVMFilesDir, 0755);
+	mkdir(themesDir.c_str(), 0755);
+
+	int copied = 0, skipped = 0;
+	const char *buf = (const char *)AAsset_getBuffer(sums);
+	off64_t len = AAsset_getLength64(sums);
+	off64_t pos = 0;
+	while (pos < len && buf) {
+		off64_t eol = pos;
+		while (eol < len && buf[eol] != '\n') eol++;
+		std::string line(buf + pos, eol - pos);
+		pos = eol + 1;
+
+		// MD5SUMS format: "<32 hex chars>  <path>"
+		if (line.size() < 35) continue;
+		std::string assetPath = line.substr(34);
+		if (assetPath.compare(0, 13, "assets/themes") != 0) continue;
+
+		std::string dest = std::string(kScummVMFilesDir) + "/gui" + assetPath.substr(6);
+		mkdirParents(dest.c_str());
+
+		AAsset *a = AAssetManager_open(mgr, assetPath.c_str(), AASSET_MODE_BUFFER);
+		if (!a) { skipped++; continue; }
+		FILE *f = fopen(dest.c_str(), "wb");
+		if (f) {
+			const void *data = AAsset_getBuffer(a);
+			off64_t alen = AAsset_getLength64(a);
+			if (data && alen > 0)
+				fwrite(data, 1, (size_t)alen, f);
+			fclose(f);
+			copied++;
+		}
+		AAsset_close(a);
+	}
+	AAsset_close(sums);
+	LOGI("Installed %d theme assets into %s (skipped %d)", copied, themesDir.c_str(), skipped);
+}
+
 // Global pointer for ScummVM thread to find the shared texture
 static VRApp *g_vrApp = nullptr;
 
@@ -854,9 +932,14 @@ static void *scummvmThreadFunc(void *arg) {
 
 	LOGI("Calling scummvm_main");
 
+	// Make the modern (orange) GUI theme available to the launcher.
+	installThemeAssets(env, assetManager);
+
 	// Build args
-	const char *argv[] = { "scummvm", "--config=/data/user/0/org.scummvm.scummvm.vr.debug/files/scummvm.ini" };
-	int argc = 2;
+	std::string configOpt = std::string("--config=") + kScummVMFilesDir + "/scummvm.ini";
+	std::string themeOpt = std::string("--themepath=") + themesDirPath();
+	const char *argv[] = { "scummvm", configOpt.c_str(), themeOpt.c_str() };
+	int argc = 3;
 
 	int result = scummvm_main(argc, argv);
 

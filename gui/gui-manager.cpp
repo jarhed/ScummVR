@@ -84,7 +84,7 @@ GuiManager::GuiManager() : CommandSender(nullptr), _redrawStatus(kRedrawDisabled
 	initIconsSet();
 	_iconsSetChanged = false;
 
-	ConfMan.registerDefault("gui_theme", "scummremastered");
+	ConfMan.registerDefault("gui_theme", "scummmodern");
 	Common::String themefile(ConfMan.get("gui_theme"));
 
 	ConfMan.registerDefault("gui_renderer", ThemeEngine::findModeConfigName(ThemeEngine::_defaultRendererMode));
