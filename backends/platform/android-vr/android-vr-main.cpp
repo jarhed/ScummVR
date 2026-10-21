@@ -61,6 +61,11 @@
 // it dereferences the null _event_queue_lock (SIGSEGV at startup).
 volatile bool g_scummvmReady = false;
 
+// The files dir of the debug VR package (config file, unpacked GUI themes,
+// and the persisted VR screen scale). Matches the package/applicationId in
+// our Gradle setup.
+static const char *kScummVMFilesDir = "/data/user/0/org.scummvm.scummvm.vr.debug/files";
+
 #define MAX_VIEWS 4
 #define MAX_SWAPCHAIN_LENGTH 4
 
@@ -82,7 +87,8 @@ static const char *kScreenFrag =
 	"void main() { color = texture(tex, vUV); }\n";
 
 // Floating UI buttons shown around the virtual screen (see initUIButtons)
-enum { kBtnMenu = 0, kBtnCount };
+struct UIButtonDesc { float cx, cy, hw, hh; };
+enum { kBtnMenu = 0, kBtnZoomIn, kBtnZoomOut, kBtnCount };
 
 struct VRApp {
 	android_app *app;
@@ -119,16 +125,20 @@ struct VRApp {
 
 	XrFrameState frameState;
 
-	// Virtual screen rendering
+	// Virtual screen rendering (resizable: half-extents in meters at z=-2.5,
+	// derived from screenScale by the +/- floating buttons)
 	GLuint screenProgram;
 	GLuint screenVBO;
 	GLint screenMVPLoc;
 	GLint screenTexLoc;
+	float screenScale;
+	float screenHW, screenHH;
 
 	// Floating UI buttons near the screen edges
 	GLuint uiProgram;
 	GLuint uiVBO;
 	GLuint uiTexIds[kBtnCount];
+	UIButtonDesc uiDesc[kBtnCount];
 	GLint uiMVPLoc;
 	GLint uiTexLoc;
 	GLint uiTintLoc;
@@ -429,6 +439,52 @@ static GLuint compileShader(GLenum type, const char *src) {
 	return s;
 }
 
+// The VR screen's scale is persisted in its own tiny file — the VR thread
+// can read/write it without ever touching ScummVM's ConfMan.
+static const float kScreenScaleMin = 0.5f, kScreenScaleMax = 2.0f;
+
+static float clampScreenScale(float s) {
+	if (s < kScreenScaleMin) return kScreenScaleMin;
+	if (s > kScreenScaleMax) return kScreenScaleMax;
+	return s;
+}
+
+static float loadScreenScale() {
+	std::string path = std::string(kScummVMFilesDir) + "/vr_screen_scale";
+	float s = 1.0f;
+	FILE *f = fopen(path.c_str(), "r");
+	if (f) {
+		if (fscanf(f, "%f", &s) != 1)
+			s = 1.0f;
+		fclose(f);
+	}
+	return clampScreenScale(s);
+}
+
+static void saveScreenScale(float s) {
+	std::string path = std::string(kScummVMFilesDir) + "/vr_screen_scale";
+	FILE *f = fopen(path.c_str(), "w");
+	if (f) {
+		fprintf(f, "%.4f\n", s);
+		fclose(f);
+	}
+}
+
+// Re-upload the screen quad positions after a scale change (UVs unchanged)
+static void updateScreenQuadVBO(VRApp *a) {
+	float hw = a->screenHW, hh = a->screenHH, d = -2.5f;
+	float verts[] = {
+		// pos (x,y,z)          uv
+		-hw, -hh, d,   0, 1,   // bottom-left
+		 hw, -hh, d,   1, 1,   // bottom-right
+		-hw,  hh, d,   0, 0,   // top-left
+		 hw,  hh, d,   1, 0,   // top-right
+	};
+	glBindBuffer(GL_ARRAY_BUFFER, a->screenVBO);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
 static void initScreenQuad(VRApp *a) {
 	GLuint vs = compileShader(GL_VERTEX_SHADER, kScreenVert);
 	GLuint fs = compileShader(GL_FRAGMENT_SHADER, kScreenFrag);
@@ -440,8 +496,12 @@ static void initScreenQuad(VRApp *a) {
 	a->screenMVPLoc = glGetUniformLocation(a->screenProgram, "mvp");
 	a->screenTexLoc = glGetUniformLocation(a->screenProgram, "tex");
 
-	// Virtual screen: 3.2m wide, 1.8m tall, 2.5m away, centered at eye height
-	float hw = 1.6f, hh = 0.9f, d = -2.5f;
+	// Virtual screen: 3.2 x 1.8 m by default, 2.5 m away, centered at eye
+	// height; the floating +/- buttons scale it (persisted across launches)
+	a->screenScale = loadScreenScale();
+	a->screenHW = 1.6f * a->screenScale;
+	a->screenHH = 0.9f * a->screenScale;
+	float hw = a->screenHW, hh = a->screenHH, d = -2.5f;
 	float verts[] = {
 		// pos (x,y,z)          uv
 		-hw, -hh, d,   0, 1,   // bottom-left
@@ -451,7 +511,7 @@ static void initScreenQuad(VRApp *a) {
 	};
 	glGenBuffers(1, &a->screenVBO);
 	glBindBuffer(GL_ARRAY_BUFFER, a->screenVBO);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 	// No test texture needed — the shared texture gets ScummVM's content
@@ -493,18 +553,54 @@ static const char *kUIButtonFrag =
 	"out vec4 color;\n"
 	"void main() { color = texture(tex, vUV) * tint; }\n";
 
-struct UIButtonDesc { float cx, cy, hw, hh; };
+// Buttons stay pinned to the screen's top-left corner, so their world
+// position depends on the (user-scalable) screen half-extents.
+static void updateUIButtonLayout(VRApp *a) {
+	const float gapAbove = 0.16f; // above the screen's top edge
+	const float startX = -a->screenHW + 0.24f;
+	const float stepX = 0.46f;
+	a->uiDesc[kBtnMenu]   = { startX,               a->screenHH + gapAbove, 0.20f, 0.11f };
+	a->uiDesc[kBtnZoomIn] = { startX + stepX,       a->screenHH + gapAbove, 0.20f, 0.11f };
+	a->uiDesc[kBtnZoomOut]= { startX + 2.0f * stepX, a->screenHH + gapAbove, 0.20f, 0.11f };
+}
 
-// Screen is 3.2 x 1.8 m at z=-2.5 (top edge y=+0.9, left edge x=-1.6).
-// The menu button sits above the top-left corner with a small gap.
-static const UIButtonDesc kBtnDesc[kBtnCount] = {
-	{ -1.36f, 1.06f, 0.20f, 0.11f },   // menu (hamburger)
-};
+// Re-upload button quad positions after a screen scale change
+static void updateUIButtonsVBO(VRApp *a) {
+	float verts[kBtnCount][4][5];
+	for (int b = 0; b < kBtnCount; b++) {
+		const UIButtonDesc &d = a->uiDesc[b];
+		float x0 = d.cx - d.hw, x1 = d.cx + d.hw;
+		float y0 = d.cy - d.hh, y1 = d.cy + d.hh;
+		verts[b][0][0] = x0; verts[b][0][1] = y0; verts[b][0][2] = -2.5f; verts[b][0][3] = 0; verts[b][0][4] = 0;
+		verts[b][1][0] = x1; verts[b][1][1] = y0; verts[b][1][2] = -2.5f; verts[b][1][3] = 1; verts[b][1][4] = 0;
+		verts[b][2][0] = x0; verts[b][2][1] = y1; verts[b][2][2] = -2.5f; verts[b][2][3] = 0; verts[b][2][4] = 1;
+		verts[b][3][0] = x1; verts[b][3][1] = y1; verts[b][3][2] = -2.5f; verts[b][3][3] = 1; verts[b][3][4] = 1;
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, a->uiVBO);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
 
-// Procedural icon texture: dark rounded panel, orange border, hamburger glyph
-// (three bars). No text rendering exists in the VR backend, so glyphs are drawn
-// straight into the pixel buffer.
-static GLuint makeMenuIconTexture() {
+// Grow/shrink the virtual screen (triggered by the +/- floating buttons);
+// screen quad, button anchors and the ray-to-pixel mapping all follow.
+static void setScreenScale(VRApp *a, float s) {
+	s = clampScreenScale(s);
+	if (s == a->screenScale)
+		return;
+	a->screenScale = s;
+	a->screenHW = 1.6f * s;
+	a->screenHH = 0.9f * s;
+	updateScreenQuadVBO(a);
+	updateUIButtonLayout(a);
+	updateUIButtonsVBO(a);
+	saveScreenScale(s);
+	LOGI("VR screen scale set to %.2f (%.1f x %.1f m)", s, 2 * a->screenHW, 2 * a->screenHH);
+}
+
+// Procedural icon texture: dark rounded panel, orange border, white glyph.
+// Glyph kinds: hamburger (menu), plus, minus. No text rendering exists in
+// the VR backend, so glyphs are drawn straight into the pixel buffer.
+static GLuint makeIconTexture(int glyph) {
 	const int W = 256, H = 144;
 	static uint8_t px[W * H * 4];
 	const float r = 26.0f; // rounded corner radius
@@ -526,12 +622,20 @@ static GLuint makeMenuIconTexture() {
 			if (d > -4.0f) { R = 255; G = 150; B = 60; }   // orange border ring
 			else           { R = 38;  G = 38;  B = 48;  }  // dark panel
 
-			// Hamburger glyph: three horizontal bars centered
-			bool bar = fabsf(fx - W / 2.0f) < 46.0f &&
-			           (fabsf(fy - H / 2.0f) < 7.0f ||
-			            fabsf(fy - (H / 2.0f - 24.0f)) < 7.0f ||
-			            fabsf(fy - (H / 2.0f + 24.0f)) < 7.0f);
-			if (bar) { R = 245; G = 245; B = 240; }
+			// Glyph: three bars (menu), cross (+) or single bar (-)
+			float cx = W / 2.0f, cy = H / 2.0f;
+			bool onGlyph = false;
+			if (glyph == kBtnMenu)
+				onGlyph = fabsf(fx - cx) < 46.0f &&
+				          (fabsf(fy - cy) < 7.0f ||
+				           fabsf(fy - (cy - 24.0f)) < 7.0f ||
+				           fabsf(fy - (cy + 24.0f)) < 7.0f);
+			else if (glyph == kBtnZoomIn)
+				onGlyph = (fabsf(fx - cx) < 46.0f && fabsf(fy - cy) < 7.0f) ||
+				          (fabsf(fy - cy) < 46.0f && fabsf(fx - cx) < 7.0f);
+			else if (glyph == kBtnZoomOut)
+				onGlyph = fabsf(fx - cx) < 46.0f && fabsf(fy - cy) < 7.0f;
+			if (onGlyph) { R = 245; G = 245; B = 240; }
 
 			p[0] = R; p[1] = G; p[2] = B; p[3] = 240;
 		}
@@ -597,22 +701,17 @@ static void initUIButtons(VRApp *a) {
 	a->uiTexLoc  = glGetUniformLocation(a->uiProgram, "tex");
 	a->uiTintLoc = glGetUniformLocation(a->uiProgram, "tint");
 
-	a->uiTexIds[kBtnMenu] = makeMenuIconTexture();
+	a->uiTexIds[kBtnMenu]    = makeIconTexture(kBtnMenu);
+	a->uiTexIds[kBtnZoomIn]  = makeIconTexture(kBtnZoomIn);
+	a->uiTexIds[kBtnZoomOut] = makeIconTexture(kBtnZoomOut);
 
-	// Static VBO: one triangle-strip quad per button (pos3 + uv2, like the screen quad)
-	float verts[kBtnCount][4][5];
-	for (int b = 0; b < kBtnCount; b++) {
-		const UIButtonDesc &d = kBtnDesc[b];
-		float x0 = d.cx - d.hw, x1 = d.cx + d.hw;
-		float y0 = d.cy - d.hh, y1 = d.cy + d.hh;
-		verts[b][0][0] = x0; verts[b][0][1] = y0; verts[b][0][2] = -2.5f; verts[b][0][3] = 0; verts[b][0][4] = 0;
-		verts[b][1][0] = x1; verts[b][1][1] = y0; verts[b][1][2] = -2.5f; verts[b][1][3] = 1; verts[b][1][4] = 0;
-		verts[b][2][0] = x0; verts[b][2][1] = y1; verts[b][2][2] = -2.5f; verts[b][2][3] = 0; verts[b][2][4] = 1;
-		verts[b][3][0] = x1; verts[b][3][1] = y1; verts[b][3][2] = -2.5f; verts[b][3][3] = 1; verts[b][3][4] = 1;
-	}
+	// One triangle-strip quad per button (pos3 + uv2, like the screen quad);
+	// positions are rebuilt whenever the screen is scaled
+	updateUIButtonLayout(a);
 	glGenBuffers(1, &a->uiVBO);
 	glBindBuffer(GL_ARRAY_BUFFER, a->uiVBO);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, kBtnCount * 4 * 5 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+	updateUIButtonsVBO(a);
 
 	// Cursor dot: texture + dynamic VBO (quad rebuilt every frame at the ray hit)
 	a->uiCursorTex = makeCursorTexture();
@@ -685,9 +784,9 @@ static void drawUIButtons(VRApp *a, const float *viewProj) {
 }
 
 // Which floating button (if any) the ray-plane hit point falls inside
-static int uiButtonAt(float hitX, float hitY) {
+static int uiButtonAt(VRApp *a, float hitX, float hitY) {
 	for (int b = 0; b < kBtnCount; b++) {
-		const UIButtonDesc &d = kBtnDesc[b];
+		const UIButtonDesc &d = a->uiDesc[b];
 		if (hitX >= d.cx - d.hw && hitX <= d.cx + d.hw &&
 		    hitY >= d.cy - d.hh && hitY <= d.cy + d.hh)
 			return b;
@@ -696,12 +795,16 @@ static int uiButtonAt(float hitX, float hitY) {
 }
 
 static void fireUIButton(VRApp *a, OSystem_Android *sys, int button) {
-	if (!sys) return;
 	if (button == kBtnMenu) {
+		if (!sys) return;
 		// Global ScummVM menu, same as the Touch Menu button / desktop Ctrl+F1
 		Common::Event ev;
 		ev.type = Common::EVENT_MAINMENU;
 		sys->pushEvent(ev);
+	} else if (button == kBtnZoomIn) {
+		setScreenScale(a, a->screenScale * 1.25f);
+	} else if (button == kBtnZoomOut) {
+		setScreenScale(a, a->screenScale / 1.25f);
 	}
 }
 
@@ -780,7 +883,7 @@ static void processInput(VRApp *a) {
 	}
 
 	// Ray-screen intersection for right controller (hand index 1)
-	// Virtual screen: 3.2m wide, 1.8m tall, at z = -2.5m
+	// Virtual screen: a->screenHW/screenHH half-extents at z = -2.5 m
 	XrPosef &pose = a->handPoses[1];
 	float qx = pose.orientation.x, qy = pose.orientation.y;
 	float qz = pose.orientation.z, qw = pose.orientation.w;
@@ -802,9 +905,9 @@ static void processInput(VRApp *a) {
 			a->rayHitY = hitY;
 
 			// Floating buttons live on this same plane, outside the screen rect
-			hover = uiButtonAt(hitX, hitY);
+			hover = uiButtonAt(a, hitX, hitY);
 
-			float hw = 1.6f, hh = 0.9f;
+			float hw = a->screenHW, hh = a->screenHH;
 			if (hover < 0 && hitX >= -hw && hitX <= hw && hitY >= -hh && hitY <= hh) {
 				// Direct mapping from the plane hit to game pixels, matching
 				// the screen quad's UV layout (v=0 is at the world top edge).
@@ -1028,10 +1131,6 @@ static void renderFrame(VRApp *a) {
 extern "C" int scummvm_main(int argc, const char * const argv[]);
 
 #include "backends/platform/android/jni-android.h"
-
-// The files dir of the debug VR package (used for the config file and the
-// unpacked GUI themes). Matches the package/applicationId in our Gradle setup.
-static const char *kScummVMFilesDir = "/data/user/0/org.scummvm.scummvm.vr.debug/files";
 
 // The VR app is started through NativeActivity, so the Java-side asset copy
 // (updateAssetsToInternalMemory) never runs and the launcher falls back to the
