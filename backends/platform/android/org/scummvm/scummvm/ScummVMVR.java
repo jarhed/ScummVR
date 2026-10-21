@@ -154,7 +154,13 @@ public class ScummVMVR extends ScummVM {
 	@Override
 	protected String[] getAllStorageLocations() {
 		// Storage locations are returned as pairs: [label, path, label, path, ...]
-		return new String[]{ "Internal", _activity.getFilesDir().getAbsolutePath() };
+		// "Quest Storage" is the shared external storage (/sdcard); POSIX access
+		// to it requires the MANAGE_EXTERNAL_STORAGE app-op:
+		//   adb shell appops set <package> MANAGE_EXTERNAL_STORAGE allow
+		return new String[]{
+			"Internal", _activity.getFilesDir().getAbsolutePath(),
+			"Quest Storage", "/sdcard",
+		};
 	}
 
 	@Override
