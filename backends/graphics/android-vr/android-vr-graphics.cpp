@@ -128,7 +128,10 @@ AndroidVRGraphicsManager::~AndroidVRGraphicsManager() {
 	if (_sceneFBO) {
 		glDeleteFramebuffers(1, &_sceneFBO);
 	}
-	if (_sceneTexture) {
+	// _sceneTexture is normally the VR thread's shared texture (adopted in
+	// initSurface, owned by android_main). Deleting it here would kill the
+	// VR display; only delete textures we created ourselves.
+	if (_sceneTexture && _sceneTexture != g_vrSharedTexture) {
 		glDeleteTextures(1, &_sceneTexture);
 	}
 	if (_sceneDepthBuffer) {
@@ -203,7 +206,10 @@ void AndroidVRGraphicsManager::deinitSurface() {
 	destroyVRShaders();
 
 	if (_sceneFBO) { glDeleteFramebuffers(1, &_sceneFBO); _sceneFBO = 0; }
-	if (_sceneTexture) { glDeleteTextures(1, &_sceneTexture); _sceneTexture = 0; }
+	if (_sceneTexture && _sceneTexture != g_vrSharedTexture) {
+		glDeleteTextures(1, &_sceneTexture);
+	}
+	_sceneTexture = 0;
 	if (_sceneDepthBuffer) { glDeleteRenderbuffers(1, &_sceneDepthBuffer); _sceneDepthBuffer = 0; }
 
 	notifyContextDestroy();
